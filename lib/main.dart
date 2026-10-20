@@ -1,7 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
 
 void main() {
   runApp(const EasyRentApp());
@@ -32,6 +36,8 @@ class Tenant {
   final String phone;
   final int monthlyRent;
   final int dueDay;
+  final int securityDeposit;
+  final int depositPaid;
 
   Tenant({
     required this.id,
@@ -40,7 +46,30 @@ class Tenant {
     required this.phone,
     required this.monthlyRent,
     required this.dueDay,
+    required this.securityDeposit,
+    required this.depositPaid,
   });
+
+  Tenant copyWith({
+    String? name,
+    String? room,
+    String? phone,
+    int? monthlyRent,
+    int? dueDay,
+    int? securityDeposit,
+    int? depositPaid,
+  }) {
+    return Tenant(
+      id: id,
+      name: name ?? this.name,
+      room: room ?? this.room,
+      phone: phone ?? this.phone,
+      monthlyRent: monthlyRent ?? this.monthlyRent,
+      dueDay: dueDay ?? this.dueDay,
+      securityDeposit: securityDeposit ?? this.securityDeposit,
+      depositPaid: depositPaid ?? this.depositPaid,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -49,15 +78,19 @@ class Tenant {
         'phone': phone,
         'monthlyRent': monthlyRent,
         'dueDay': dueDay,
+        'securityDeposit': securityDeposit,
+        'depositPaid': depositPaid,
       };
 
   factory Tenant.fromJson(Map<String, dynamic> json) => Tenant(
-        id: json['id'],
-        name: json['name'],
-        room: json['room'],
-        phone: json['phone'],
-        monthlyRent: json['monthlyRent'],
-        dueDay: json['dueDay'],
+        id: json['id'].toString(),
+        name: json['name'] ?? '',
+        room: json['room'] ?? '',
+        phone: json['phone'] ?? '',
+        monthlyRent: (json['monthlyRent'] as num?)?.toInt() ?? 0,
+        dueDay: (json['dueDay'] as num?)?.toInt() ?? 5,
+        securityDeposit: (json['securityDeposit'] as num?)?.toInt() ?? 0,
+        depositPaid: (json['depositPaid'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -73,7 +106,7 @@ class PaymentRecord {
       };
 
   factory PaymentRecord.fromJson(Map<String, dynamic> json) => PaymentRecord(
-        paidAmount: json['paidAmount'] ?? 0,
+        paidAmount: (json['paidAmount'] as num?)?.toInt() ?? 0,
         lastUpdated: json['lastUpdated'] ?? '',
       );
 }
@@ -86,14 +119,13 @@ class RentTrackerHome extends StatefulWidget {
 }
 
 class _RentTrackerHomeState extends State<RentTrackerHome> {
-  static const String _storageKey = 'easyrent_flutter_v1';
+  static const String _storageKey = 'easyrent_flutter_v2';
 
   List<Tenant> _tenants = [];
-  // Format: { "YYYY-MM": { "tenantId": PaymentRecord } }
   Map<String, Map<String, PaymentRecord>> _payments = {};
 
   DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
-  String _filter = 'all'; // 'all', 'due', 'partial', 'paid'
+  String _filter = 'all'; // 'all', 'due', 'partial', 'paid', 'deposit_due'
   String _searchQuery = '';
 
   @override
@@ -107,50 +139,88 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
 
   String get _monthDisplay {
     const months = [
-      'ജനുവരി', 'ഫെബ്രുവരി', 'മാർച്ച്', 'ഏപ്രിൽ', 'മെയ്', 'ജൂൺ',
-      'ജൂലൈ', 'ഓഗസ്റ്റ്', 'സെപ്റ്റംബർ', 'ഒക്ടോബർ', 'നവംബർ', 'ഡിസംബർ'
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
     ];
     return '${months[_selectedMonth.month - 1]} ${_selectedMonth.year}';
+  }
+
+  String _encodeAllData() {
+    final data = {
+      'app': 'EasyRentTracker',
+      'version': 2,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'tenants': _tenants.map((t) => t.toJson()).toList(),
+      'payments': _payments.map((month, records) => MapEntry(
+            month,
+            records.map((tId, rec) => MapEntry(tId, rec.toJson())),
+          )),
+    };
+    return const JsonEncoder.withIndent('  ').convert(data);
+  }
+
+  bool _applyJsonData(String rawJson) {
+    try {
+      final decoded = jsonDecode(rawJson);
+      if (decoded is! Map<String, dynamic> || !decoded.containsKey('tenants')) {
+        return false;
+      }
+
+      final List<dynamic> tenantList = decoded['tenants'] ?? [];
+      final Map<String, dynamic> paymentMap = decoded['payments'] ?? {};
+
+      final loadedTenants = tenantList.map((e) => Tenant.fromJson(e)).toList();
+      final loadedPayments = paymentMap.map((month, records) {
+        final Map<String, dynamic> tenantRecords =
+            Map<String, dynamic>.from(records);
+        return MapEntry(
+          month,
+          tenantRecords.map(
+            (tId, rec) => MapEntry(
+              tId,
+              PaymentRecord.fromJson(Map<String, dynamic>.from(rec)),
+            ),
+          ),
+        );
+      });
+
+      setState(() {
+        _tenants = loadedTenants;
+        _payments = loadedPayments;
+      });
+      _saveData();
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_storageKey);
     if (raw != null) {
-      final decoded = jsonDecode(raw);
-      final List<dynamic> tenantList = decoded['tenants'] ?? [];
-      final Map<String, dynamic> paymentMap = decoded['payments'] ?? {};
-
-      setState(() {
-        _tenants = tenantList.map((e) => Tenant.fromJson(e)).toList();
-        _payments = paymentMap.map((month, records) {
-          final Map<String, dynamic> tenantRecords = records;
-          return MapEntry(
-            month,
-            tenantRecords.map(
-              (tId, rec) => MapEntry(tId, PaymentRecord.fromJson(rec)),
-            ),
-          );
-        });
-      });
+      _applyJsonData(raw);
     } else {
-      // പ്രാരംഭ മാതൃക ഡാറ്റ (Sample Data)
       _tenants = [
         Tenant(
           id: '1',
-          name: 'രാഹുൽ നായർ',
+          name: 'Rahul Sharma',
           room: '101-A',
           phone: '9876543210',
           monthlyRent: 8000,
           dueDay: 5,
+          securityDeposit: 16000,
+          depositPaid: 16000,
         ),
         Tenant(
           id: '2',
-          name: 'അജയ് കൃഷ്ണൻ',
+          name: 'Ajay Krishnan',
           room: '102-B',
           phone: '9811223344',
           monthlyRent: 7500,
           dueDay: 5,
+          securityDeposit: 15000,
+          depositPaid: 10000,
         ),
       ];
       _saveData();
@@ -159,14 +229,190 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
 
   Future<void> _saveData() async {
     final prefs = await SharedPreferences.getInstance();
-    final data = {
-      'tenants': _tenants.map((t) => t.toJson()).toList(),
-      'payments': _payments.map((month, records) => MapEntry(
-            month,
-            records.map((tId, rec) => MapEntry(tId, rec.toJson())),
-          )),
-    };
-    await prefs.setString(_storageKey, jsonEncode(data));
+    await prefs.setString(_storageKey, _encodeAllData());
+  }
+
+  // Export Data as .json File
+  Future<void> _exportBackupFile() async {
+    try {
+      final directory = await getTemporaryDirectory();
+      final now = DateTime.now();
+      final fileName =
+          'easyrent_backup_${now.year}_${now.month}_${now.day}.json';
+      final file = File('${directory.path}/$fileName');
+
+      await file.writeAsString(_encodeAllData());
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'EasyRent Tracker Backup ($fileName)',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error creating backup file: $e')),
+      );
+    }
+  }
+
+  // Import Data from .json File
+  Future<void> _importBackupFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+      );
+
+      if (result != null && result.files.single.path != null) {
+        final file = File(result.files.single.path!);
+        final content = await file.readAsString();
+        final success = _applyJsonData(content);
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              success
+                  ? '✅ Backup restored successfully!'
+                  : '❌ Invalid backup file selected.',
+            ),
+            backgroundColor:
+                success ? Colors.green.shade700 : Colors.red.shade700,
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to import file: $e')),
+      );
+    }
+  }
+
+  void _showPasteBackupDialog() {
+    final pasteCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Paste Backup Code'),
+        content: TextField(
+          controller: pasteCtrl,
+          maxLines: 6,
+          decoration: const InputDecoration(
+            hintText: 'Paste your copied JSON backup data here...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final success = _applyJsonData(pasteCtrl.text.trim());
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    success
+                        ? '✅ Data restored successfully!'
+                        : '❌ Invalid backup code.',
+                  ),
+                ),
+              );
+            },
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showBackupMenu() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Backup & Restore Data',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Export your rent and deposit records so you never lose data when switching phones.',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+              ),
+              const Divider(height: 24),
+              ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: Colors.blue.shade50,
+                  child: Icon(Icons.upload_file, color: Colors.blue.shade700),
+                ),
+                title: const Text('Export Backup File (.json)'),
+                subtitle: const Text('Save to Google Drive, WhatsApp, or Phone'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _exportBackupFile();
+                },
+              ),
+              ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: Colors.green.shade50,
+                  child: Icon(Icons.download_for_offline,
+                      color: Colors.green.shade700),
+                ),
+                title: const Text('Import Backup File (.json)'),
+                subtitle: const Text('Restore records from a saved backup file'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _importBackupFile();
+                },
+              ),
+              const Divider(),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Clipboard.setData(
+                            ClipboardData(text: _encodeAllData()));
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Backup code copied to clipboard!'),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.copy, size: 18),
+                      label: const Text('Copy Text'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showPasteBackupDialog();
+                      },
+                      icon: const Icon(Icons.paste, size: 18),
+                      label: const Text('Paste Text'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   int _getPaidAmount(String tenantId) {
@@ -191,40 +437,60 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     _saveData();
   }
 
+  void _updateDeposit(Tenant tenant, int newDepositPaid, int newTotalDeposit) {
+    final index = _tenants.indexWhere((t) => t.id == tenant.id);
+    if (index == -1) return;
+
+    setState(() {
+      _tenants[index] = tenant.copyWith(
+        securityDeposit: newTotalDeposit.clamp(0, 10000000),
+        depositPaid: newDepositPaid.clamp(0, newTotalDeposit),
+      );
+    });
+    _saveData();
+  }
+
   void _changeMonth(int offset) {
     setState(() {
-      _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + offset);
+      _selectedMonth =
+          DateTime(_selectedMonth.year, _selectedMonth.month + offset);
     });
   }
 
-  void _showPaymentDialog(Tenant tenant) {
+  // Monthly Rent Payment Dialog
+  void _showRentPaymentDialog(Tenant tenant) {
     final currentPaid = _getPaidAmount(tenant.id);
-    final balance = (tenant.monthlyRent - currentPaid).clamp(0, tenant.monthlyRent);
+    final balance =
+        (tenant.monthlyRent - currentPaid).clamp(0, tenant.monthlyRent);
     final controller = TextEditingController();
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('${tenant.name} (${tenant.room})'),
+        title: Text('Rent — ${tenant.name} (${tenant.room})'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('മാസ വാടക: ₹${tenant.monthlyRent}'),
+            Text('Month: $_monthDisplay'),
+            const SizedBox(height: 6),
+            Text('Monthly Rent: ₹${tenant.monthlyRent}'),
             Text(
-              'ഇതുവരെ ലഭിച്ചത്: ₹$currentPaid',
-              style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w600),
+              'Paid So Far: ₹$currentPaid',
+              style: const TextStyle(
+                  color: Colors.green, fontWeight: FontWeight.w600),
             ),
             Text(
-              'ഇനി ലഭിക്കാനുള്ള ബാക്കി: ₹$balance',
-              style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+              'Balance Due: ₹$balance',
+              style: const TextStyle(
+                  color: Colors.red, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: controller,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: 'ഇപ്പോൾ ലഭിച്ച തുക ചേർക്കുക (₹)',
+                labelText: 'Add Rent Payment Received (₹)',
                 border: OutlineInputBorder(),
                 prefixText: '₹ ',
               ),
@@ -238,14 +504,15 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                 _updatePayment(tenant, 0);
                 Navigator.pop(context);
               },
-              child: const Text('റീസെറ്റ് (₹0)', style: TextStyle(color: Colors.red)),
+              child: const Text('Reset (₹0)',
+                  style: TextStyle(color: Colors.red)),
             ),
           TextButton(
             onPressed: () {
               _updatePayment(tenant, tenant.monthlyRent);
               Navigator.pop(context);
             },
-            child: const Text('മുഴുവൻ തുകയും (Full)'),
+            child: const Text('Mark Full Paid'),
           ),
           FilledButton(
             onPressed: () {
@@ -255,54 +522,159 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
               }
               Navigator.pop(context);
             },
-            child: const Text('സേവ് ചെയ്യുക'),
+            child: const Text('Save'),
           ),
         ],
       ),
     );
   }
 
+  // Security Deposit Collection Dialog
+  void _showDepositDialog(Tenant tenant) {
+    final depositBalance =
+        (tenant.securityDeposit - tenant.depositPaid).clamp(0, tenant.securityDeposit);
+    final addDepositCtrl = TextEditingController();
+    final totalDepositCtrl =
+        TextEditingController(text: tenant.securityDeposit.toString());
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Security Deposit — ${tenant.name}'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Collected: ₹${tenant.depositPaid} / ₹${tenant.securityDeposit}',
+                style: const TextStyle(
+                    color: Colors.green, fontWeight: FontWeight.w600),
+              ),
+              Text(
+                'Pending Deposit: ₹$depositBalance',
+                style: const TextStyle(
+                    color: Colors.red, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: addDepositCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Add Deposit Received Now (₹)',
+                  border: OutlineInputBorder(),
+                  prefixText: '₹ ',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: totalDepositCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Total Agreed Deposit Amount (₹)',
+                  border: OutlineInputBorder(),
+                  prefixText: '₹ ',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          if (tenant.depositPaid > 0)
+            TextButton(
+              onPressed: () {
+                final newTotal = int.tryParse(totalDepositCtrl.text.trim()) ??
+                    tenant.securityDeposit;
+                _updateDeposit(tenant, 0, newTotal);
+                Navigator.pop(context);
+              },
+              child: const Text('Reset Paid (₹0)',
+                  style: TextStyle(color: Colors.red)),
+            ),
+          TextButton(
+            onPressed: () {
+              final newTotal = int.tryParse(totalDepositCtrl.text.trim()) ??
+                  tenant.securityDeposit;
+              _updateDeposit(tenant, newTotal, newTotal);
+              Navigator.pop(context);
+            },
+            child: const Text('Mark Full Paid'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final newTotal = int.tryParse(totalDepositCtrl.text.trim()) ??
+                  tenant.securityDeposit;
+              final added = int.tryParse(addDepositCtrl.text.trim()) ?? 0;
+              _updateDeposit(tenant, tenant.depositPaid + added, newTotal);
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Add New Tenant Dialog
   void _showAddTenantDialog() {
     final nameCtrl = TextEditingController();
     final roomCtrl = TextEditingController();
     final phoneCtrl = TextEditingController();
     final rentCtrl = TextEditingController();
+    final depositTotalCtrl = TextEditingController();
+    final depositPaidCtrl = TextEditingController();
     final dueCtrl = TextEditingController(text: '5');
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('പുതിയ താമസക്കാരനെ ചേർക്കുക'),
+        title: const Text('Add New Tenant'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'പേര് (Name)'),
+                decoration: const InputDecoration(labelText: 'Tenant Name *'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: roomCtrl,
-                decoration: const InputDecoration(labelText: 'റൂം / ബെഡ് നമ്പർ (e.g. 101-A)'),
+                decoration:
+                    const InputDecoration(labelText: 'Room / Bed No. (e.g. 101-A) *'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: phoneCtrl,
                 keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(labelText: 'ഫോൺ നമ്പർ'),
+                decoration: const InputDecoration(labelText: 'Phone Number'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: rentCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'മാസ വാടക (₹)'),
+                decoration: const InputDecoration(labelText: 'Monthly Rent (₹) *'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: depositTotalCtrl,
+                keyboardType: TextInputType.number,
+                decoration:
+                    const InputDecoration(labelText: 'Security Deposit Amount (₹)'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: depositPaidCtrl,
+                keyboardType: TextInputType.number,
+                decoration:
+                    const InputDecoration(labelText: 'Deposit Paid So Far (₹)'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: dueCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'വാടക നൽകേണ്ട തീയതി (1-31)'),
+                decoration:
+                    const InputDecoration(labelText: 'Monthly Due Day (1-31)'),
               ),
             ],
           ),
@@ -310,13 +682,15 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('റദ്ദാക്കുക'),
+            child: const Text('Cancel'),
           ),
           FilledButton(
             onPressed: () {
               final name = nameCtrl.text.trim();
               final room = roomCtrl.text.trim();
               final rent = int.tryParse(rentCtrl.text.trim()) ?? 0;
+              final totalDep = int.tryParse(depositTotalCtrl.text.trim()) ?? 0;
+              final paidDep = int.tryParse(depositPaidCtrl.text.trim()) ?? 0;
               final due = int.tryParse(dueCtrl.text.trim()) ?? 5;
 
               if (name.isNotEmpty && room.isNotEmpty && rent > 0) {
@@ -328,13 +702,15 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                     phone: phoneCtrl.text.trim(),
                     monthlyRent: rent,
                     dueDay: due.clamp(1, 31),
+                    securityDeposit: totalDep,
+                    depositPaid: paidDep.clamp(0, totalDep),
                   ));
                 });
                 _saveData();
                 Navigator.pop(context);
               }
             },
-            child: const Text('ചേർക്കുക'),
+            child: const Text('Add Tenant'),
           ),
         ],
       ),
@@ -343,41 +719,70 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
 
   void _copyReminder(Tenant tenant) {
     final paid = _getPaidAmount(tenant.id);
-    final balance = tenant.monthlyRent - paid;
-    final msg = paid > 0
-        ? 'നമസ്കാരം ${tenant.name} (Room ${tenant.room}), $_monthDisplay മാസത്തെ വാടകയായ ₹${tenant.monthlyRent}-ൽ ₹$paid ലഭിച്ചിട്ടുണ്ട്. ബാക്കി തുകയായ ₹$balance ദയവായി ഉടൻ അടയ്ക്കുക.'
-        : 'നമസ്കാരം ${tenant.name} (Room ${tenant.room}), $_monthDisplay മാസത്തെ വാടകയായ ₹${tenant.monthlyRent} ഈ മാസം ${tenant.dueDay}-ാം തീയതിക്കുള്ളിൽ അടയ്ക്കേണ്ടതാണ്.';
+    final rentBalance = (tenant.monthlyRent - paid).clamp(0, tenant.monthlyRent);
+    final depBalance =
+        (tenant.securityDeposit - tenant.depositPaid).clamp(0, tenant.securityDeposit);
+
+    String msg = 'Hi ${tenant.name} (Room ${tenant.room}), ';
+    if (rentBalance > 0 && paid > 0) {
+      msg +=
+          'we received ₹$paid towards your $_monthDisplay rent of ₹${tenant.monthlyRent}. The remaining rent balance is ₹$rentBalance. ';
+    } else if (rentBalance > 0) {
+      msg +=
+          'friendly reminder that your $_monthDisplay rent of ₹${tenant.monthlyRent} is due on the ${tenant.dueDay}th. ';
+    }
+
+    if (depBalance > 0) {
+      msg += 'Your pending security deposit balance is ₹$depBalance. ';
+    }
+
+    msg += 'Please share the payment confirmation once completed.';
 
     Clipboard.setData(ClipboardData(text: msg));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('വാട്സ്ആപ്പ് റിമൈൻഡർ സന്ദേശം കോപ്പി ചെയ്തു!')),
+      const SnackBar(content: Text('Reminder copied to clipboard!')),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    int totalExpected = 0;
-    int totalCollected = 0;
+    int totalExpectedRent = 0;
+    int totalCollectedRent = 0;
+    int totalDepositHeld = 0;
+    int totalDepositPending = 0;
 
     for (final t in _tenants) {
-      totalExpected += t.monthlyRent;
-      totalCollected += _getPaidAmount(t.id);
+      totalExpectedRent += t.monthlyRent;
+      totalCollectedRent += _getPaidAmount(t.id);
+      totalDepositHeld += t.depositPaid;
+      totalDepositPending +=
+          (t.securityDeposit - t.depositPaid).clamp(0, t.securityDeposit);
     }
-    final int totalPending = (totalExpected - totalCollected).clamp(0, totalExpected);
+    final int totalPendingRent =
+        (totalExpectedRent - totalCollectedRent).clamp(0, totalExpectedRent);
 
     final filteredTenants = _tenants.where((t) {
       final paid = _getPaidAmount(t.id);
+      final depDue = t.securityDeposit - t.depositPaid;
+
       if (_filter == 'paid' && paid < t.monthlyRent) return false;
-      if (_filter == 'partial' && (paid == 0 || paid >= t.monthlyRent)) return false;
+      if (_filter == 'partial' && (paid == 0 || paid >= t.monthlyRent)) {
+        return false;
+      }
       if (_filter == 'due' && paid >= t.monthlyRent) return false;
+      if (_filter == 'deposit_due' && depDue <= 0) return false;
 
       final q = _searchQuery.toLowerCase();
-      return t.name.toLowerCase().contains(q) || t.room.toLowerCase().contains(q);
+      return t.name.toLowerCase().contains(q) ||
+          t.room.toLowerCase().contains(q);
     }).toList();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('EasyRent Tracker', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text(
+          'EasyRent Tracker',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        ),
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.white,
         actions: [
@@ -388,38 +793,90 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
           Center(
             child: Text(
               _monthDisplay,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
             ),
           ),
           IconButton(
             onPressed: () => _changeMonth(1),
             icon: const Icon(Icons.chevron_right),
           ),
+          IconButton(
+            onPressed: _showBackupMenu,
+            tooltip: 'Backup & Restore',
+            icon: const Icon(Icons.cloud_sync_outlined,
+                color: Color(0xFF2563EB)),
+          ),
         ],
       ),
       body: Column(
         children: [
-          // Summary Cards
+          // Monthly Rent Summary Cards
           Padding(
-            padding: const EdgeInsets.all(12.0),
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
             child: Row(
               children: [
-                _buildStatCard('ആകെ വാടക', '₹$totalExpected', Colors.blue.shade800),
+                _buildStatCard(
+                    'Expected Rent', '₹$totalExpectedRent', Colors.blue.shade800),
                 const SizedBox(width: 8),
-                _buildStatCard('ലഭിച്ചത്', '₹$totalCollected', Colors.green.shade700),
+                _buildStatCard(
+                    'Collected', '₹$totalCollectedRent', Colors.green.shade700),
                 const SizedBox(width: 8),
-                _buildStatCard('ബാക്കി (Due)', '₹$totalPending', Colors.red.shade700),
+                _buildStatCard(
+                    'Pending Rent', '₹$totalPendingRent', Colors.red.shade700),
               ],
             ),
           ),
 
-          // Search & Filter
+          // Security Deposit Summary Bar
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12.0),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.indigo.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.indigo.shade100),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.shield_outlined,
+                          size: 18, color: Colors.indigo.shade800),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Deposit Held: ₹$totalDepositHeld',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          color: Colors.indigo.shade900,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    'Deposit Pending: ₹$totalDepositPending',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: totalDepositPending > 0
+                          ? Colors.red.shade700
+                          : Colors.green.shade800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Search Box
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
             child: TextField(
               onChanged: (v) => setState(() => _searchQuery = v),
               decoration: InputDecoration(
-                hintText: 'പേര് അല്ലെങ്കിൽ റൂം നമ്പർ തിരയുക...',
+                hintText: 'Search by tenant name or room...',
                 prefixIcon: const Icon(Icons.search),
                 filled: true,
                 fillColor: Colors.white,
@@ -431,50 +888,59 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
               ),
             ),
           ),
-          const SizedBox(height: 8),
+
+          // Filter Chips
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                _buildFilterChip('all', 'എല്ലാം (All)'),
+                _buildFilterChip('all', 'All'),
                 const SizedBox(width: 8),
-                _buildFilterChip('due', 'ബാക്കിയുള്ളവ (Pending)'),
+                _buildFilterChip('due', 'Rent Due'),
                 const SizedBox(width: 8),
-                _buildFilterChip('partial', 'ഭാഗികം (Partial)'),
+                _buildFilterChip('partial', 'Partial Rent'),
                 const SizedBox(width: 8),
-                _buildFilterChip('paid', 'ലഭിച്ചവ (Paid)'),
+                _buildFilterChip('paid', 'Rent Paid'),
+                const SizedBox(width: 8),
+                _buildFilterChip('deposit_due', 'Deposit Pending'),
               ],
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
 
           // Tenant List
           Expanded(
             child: filteredTenants.isEmpty
-                ? const Center(child: Text('താമസക്കാരുടെ വിവരങ്ങൾ ലഭ്യമല്ല.'))
+                ? const Center(child: Text('No matching tenants found.'))
                 : ListView.builder(
                     padding: const EdgeInsets.all(12),
                     itemCount: filteredTenants.length,
                     itemBuilder: (context, index) {
                       final t = filteredTenants[index];
                       final paid = _getPaidAmount(t.id);
-                      final balance = (t.monthlyRent - paid).clamp(0, t.monthlyRent);
+                      final balance =
+                          (t.monthlyRent - paid).clamp(0, t.monthlyRent);
                       final isPaid = paid >= t.monthlyRent;
                       final isPartial = paid > 0 && paid < t.monthlyRent;
 
+                      final depBalance = (t.securityDeposit - t.depositPaid)
+                          .clamp(0, t.securityDeposit);
+                      final isDepPaid =
+                          t.securityDeposit > 0 && depBalance == 0;
+
                       Color badgeColor = Colors.red.shade700;
                       Color badgeBg = Colors.red.shade50;
-                      String statusText = 'ബാക്കി: ₹$balance';
+                      String statusText = 'Rent Due: ₹$balance';
 
                       if (isPaid) {
                         badgeColor = Colors.green.shade800;
                         badgeBg = Colors.green.shade50;
-                        statusText = '✓ പൂർണ്ണമായി ലഭിച്ചു';
+                        statusText = '✓ Rent Paid';
                       } else if (isPartial) {
                         badgeColor = Colors.orange.shade900;
                         badgeBg = Colors.orange.shade50;
-                        statusText = 'ഭാഗികം • ബാക്കി: ₹$balance';
+                        statusText = 'Partial • Due: ₹$balance';
                       }
 
                       return Card(
@@ -491,7 +957,8 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Row(
                                     children: [
@@ -510,7 +977,8 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                                         ),
                                         decoration: BoxDecoration(
                                           color: Colors.indigo.shade50,
-                                          borderRadius: BorderRadius.circular(6),
+                                          borderRadius:
+                                              BorderRadius.circular(6),
                                         ),
                                         child: Text(
                                           t.room,
@@ -524,30 +992,68 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                                     ],
                                   ),
                                   IconButton(
-                                    icon: const Icon(Icons.delete_outline, size: 20),
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 20),
                                     color: Colors.grey,
                                     onPressed: () {
-                                      setState(() => _tenants.removeWhere((x) => x.id == t.id));
+                                      setState(() => _tenants
+                                          .removeWhere((x) => x.id == t.id));
                                       _saveData();
                                     },
                                   ),
                                 ],
                               ),
                               Text(
-                                'മാസ വാടക: ₹${t.monthlyRent} • ലഭിച്ചത്: ₹$paid • തീയതി: ${t.dueDay}',
-                                style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                                'Rent: ₹${t.monthlyRent}/mo • Paid: ₹$paid • Due Day: ${t.dueDay}',
+                                style: TextStyle(
+                                    color: Colors.grey.shade700, fontSize: 13),
+                              ),
+                              const SizedBox(height: 4),
+                              // Deposit Status Line
+                              Row(
+                                children: [
+                                  Icon(
+                                    isDepPaid
+                                        ? Icons.verified_user
+                                        : Icons.account_balance_wallet_outlined,
+                                    size: 14,
+                                    color: isDepPaid
+                                        ? Colors.green.shade700
+                                        : Colors.blueGrey,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    t.securityDeposit == 0
+                                        ? 'Deposit: Not set'
+                                        : isDepPaid
+                                            ? 'Deposit: ₹${t.securityDeposit} (Fully Paid)'
+                                            : 'Deposit: ₹${t.depositPaid} / ₹${t.securityDeposit} (Due: ₹$depBalance)',
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: depBalance > 0
+                                          ? Colors.orange.shade900
+                                          : Colors.teal.shade700,
+                                    ),
+                                  ),
+                                ],
                               ),
                               if (_getLastUpdated(t.id).isNotEmpty)
                                 Padding(
                                   padding: const EdgeInsets.only(top: 2),
                                   child: Text(
-                                    'അവസാനം രേഖപ്പെടുത്തിയത്: ${_getLastUpdated(t.id)}',
-                                    style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+                                    'Last rent payment: ${_getLastUpdated(t.id)}',
+                                    style: TextStyle(
+                                        color: Colors.grey.shade500,
+                                        fontSize: 11.5),
                                   ),
                                 ),
                               const SizedBox(height: 10),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                alignment: WrapAlignment.spaceBetween,
+                                crossAxisAlignment: WrapCrossAlignment.center,
                                 children: [
                                   Container(
                                     padding: const EdgeInsets.symmetric(
@@ -568,16 +1074,33 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                                     ),
                                   ),
                                   Row(
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      if (!isPaid)
-                                        TextButton.icon(
+                                      if (!isPaid || depBalance > 0)
+                                        IconButton(
                                           onPressed: () => _copyReminder(t),
-                                          icon: const Icon(Icons.copy, size: 16),
-                                          label: const Text('റിമൈൻഡർ'),
+                                          tooltip: 'Copy Reminder',
+                                          icon: const Icon(Icons.copy, size: 18),
                                         ),
+                                      OutlinedButton(
+                                        onPressed: () => _showDepositDialog(t),
+                                        style: OutlinedButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 10),
+                                        ),
+                                        child: const Text('Deposit',
+                                            style: TextStyle(fontSize: 12.5)),
+                                      ),
+                                      const SizedBox(width: 6),
                                       FilledButton.tonal(
-                                        onPressed: () => _showPaymentDialog(t),
-                                        child: const Text('വാടക ചേർക്കുക'),
+                                        onPressed: () =>
+                                            _showRentPaymentDialog(t),
+                                        style: FilledButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 12),
+                                        ),
+                                        child: const Text('Record Rent',
+                                            style: TextStyle(fontSize: 12.5)),
                                       ),
                                     ],
                                   ),
@@ -595,7 +1118,7 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddTenantDialog,
         icon: const Icon(Icons.person_add),
-        label: const Text('താമസക്കാരനെ ചേർക്കുക'),
+        label: const Text('Add Tenant'),
       ),
     );
   }
@@ -603,7 +1126,7 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
   Widget _buildStatCard(String label, String value, Color color) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
@@ -612,11 +1135,13 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+            Text(label,
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
             const SizedBox(height: 4),
             Text(
               value,
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color),
+              style: TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.bold, color: color),
             ),
           ],
         ),
