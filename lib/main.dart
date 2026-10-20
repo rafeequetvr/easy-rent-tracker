@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 void main() {
   runApp(const EasyRentApp());
@@ -232,7 +233,6 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     await prefs.setString(_storageKey, _encodeAllData());
   }
 
-  // Export Data as .json File
   Future<void> _exportBackupFile() async {
     try {
       final directory = await getTemporaryDirectory();
@@ -255,7 +255,6 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     }
   }
 
-  // Import Data from .json File
   Future<void> _importBackupFile() async {
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -272,8 +271,8 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
           SnackBar(
             content: Text(
               success
-                  ? '✅ Backup restored successfully!'
-                  : '❌ Invalid backup file selected.',
+                  ? 'Backup restored successfully!'
+                  : 'Invalid backup file selected.',
             ),
             backgroundColor:
                 success ? Colors.green.shade700 : Colors.red.shade700,
@@ -315,8 +314,8 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                 SnackBar(
                   content: Text(
                     success
-                        ? '✅ Data restored successfully!'
-                        : '❌ Invalid backup code.',
+                        ? 'Data restored successfully!'
+                        : 'Invalid backup code.',
                   ),
                 ),
               );
@@ -457,7 +456,6 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     });
   }
 
-  // Monthly Rent Payment Dialog
   void _showRentPaymentDialog(Tenant tenant) {
     final currentPaid = _getPaidAmount(tenant.id);
     final balance =
@@ -529,10 +527,9 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     );
   }
 
-  // Security Deposit Collection Dialog
   void _showDepositDialog(Tenant tenant) {
-    final depositBalance =
-        (tenant.securityDeposit - tenant.depositPaid).clamp(0, tenant.securityDeposit);
+    final depositBalance = (tenant.securityDeposit - tenant.depositPaid)
+        .clamp(0, tenant.securityDeposit);
     final addDepositCtrl = TextEditingController();
     final totalDepositCtrl =
         TextEditingController(text: tenant.securityDeposit.toString());
@@ -615,7 +612,6 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     );
   }
 
-  // Add New Tenant Dialog
   void _showAddTenantDialog() {
     final nameCtrl = TextEditingController();
     final roomCtrl = TextEditingController();
@@ -640,41 +636,43 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
               const SizedBox(height: 8),
               TextField(
                 controller: roomCtrl,
-                decoration:
-                    const InputDecoration(labelText: 'Room / Bed No. (e.g. 101-A) *'),
+                decoration: const InputDecoration(
+                    labelText: 'Room / Bed No. (e.g. 101-A) *'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: phoneCtrl,
                 keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(labelText: 'Phone Number'),
+                decoration: const InputDecoration(
+                    labelText: 'WhatsApp Phone Number (e.g. 9876543210)'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: rentCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Monthly Rent (₹) *'),
+                decoration:
+                    const InputDecoration(labelText: 'Monthly Rent (₹) *'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: depositTotalCtrl,
                 keyboardType: TextInputType.number,
-                decoration:
-                    const InputDecoration(labelText: 'Security Deposit Amount (₹)'),
+                decoration: const InputDecoration(
+                    labelText: 'Security Deposit Amount (₹)'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: depositPaidCtrl,
                 keyboardType: TextInputType.number,
-                decoration:
-                    const InputDecoration(labelText: 'Deposit Paid So Far (₹)'),
+                decoration: const InputDecoration(
+                    labelText: 'Deposit Paid So Far (₹)'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: dueCtrl,
                 keyboardType: TextInputType.number,
-                decoration:
-                    const InputDecoration(labelText: 'Monthly Due Day (1-31)'),
+                decoration: const InputDecoration(
+                    labelText: 'Monthly Due Day (1-31)'),
               ),
             ],
           ),
@@ -717,11 +715,12 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     );
   }
 
-  void _copyReminder(Tenant tenant) {
+  String _buildReminderMessage(Tenant tenant) {
     final paid = _getPaidAmount(tenant.id);
-    final rentBalance = (tenant.monthlyRent - paid).clamp(0, tenant.monthlyRent);
-    final depBalance =
-        (tenant.securityDeposit - tenant.depositPaid).clamp(0, tenant.securityDeposit);
+    final rentBalance =
+        (tenant.monthlyRent - paid).clamp(0, tenant.monthlyRent);
+    final depBalance = (tenant.securityDeposit - tenant.depositPaid)
+        .clamp(0, tenant.securityDeposit);
 
     String msg = 'Hi ${tenant.name} (Room ${tenant.room}), ';
     if (rentBalance > 0 && paid > 0) {
@@ -737,11 +736,59 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     }
 
     msg += 'Please share the payment confirmation once completed.';
+    return msg;
+  }
 
-    Clipboard.setData(ClipboardData(text: msg));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Reminder copied to clipboard!')),
+  Future<void> _sendWhatsAppReminder(Tenant tenant) async {
+    final msg = _buildReminderMessage(tenant);
+    String digitsOnly = tenant.phone.replaceAll(RegExp(r'[^0-9]'), '');
+
+    if (digitsOnly.isEmpty) {
+      Clipboard.setData(ClipboardData(text: msg));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'No phone number saved. Reminder copied to clipboard instead!'),
+        ),
+      );
+      return;
+    }
+
+    // Automatically add India country code (91) if 10 digits are entered
+    if (digitsOnly.length == 10) {
+      digitsOnly = '91$digitsOnly';
+    }
+
+    final whatsappUri = Uri.parse(
+      'https://wa.me/$digitsOnly?text=${Uri.encodeComponent(msg)}',
     );
+
+    try {
+      final launched = await launchUrl(
+        whatsappUri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!launched) {
+        Clipboard.setData(ClipboardData(text: msg));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Could not open WhatsApp. Reminder copied to clipboard!'),
+          ),
+        );
+      }
+    } catch (e) {
+      Clipboard.setData(ClipboardData(text: msg));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Could not open WhatsApp. Reminder copied to clipboard!'),
+        ),
+      );
+    }
   }
 
   @override
@@ -815,8 +862,8 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
             child: Row(
               children: [
-                _buildStatCard(
-                    'Expected Rent', '₹$totalExpectedRent', Colors.blue.shade800),
+                _buildStatCard('Expected Rent', '₹$totalExpectedRent',
+                    Colors.blue.shade800),
                 const SizedBox(width: 8),
                 _buildStatCard(
                     'Collected', '₹$totalCollectedRent', Colors.green.shade700),
@@ -1009,7 +1056,6 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                                     color: Colors.grey.shade700, fontSize: 13),
                               ),
                               const SizedBox(height: 4),
-                              // Deposit Status Line
                               Row(
                                 children: [
                                   Icon(
@@ -1077,11 +1123,20 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       if (!isPaid || depBalance > 0)
-                                        IconButton(
-                                          onPressed: () => _copyReminder(t),
-                                          tooltip: 'Copy Reminder',
-                                          icon: const Icon(Icons.copy, size: 18),
+                                        IconButton.filledTonal(
+                                          onPressed: () =>
+                                              _sendWhatsAppReminder(t),
+                                          tooltip: 'Send WhatsApp Reminder',
+                                          style: IconButton.styleFrom(
+                                            backgroundColor:
+                                                Colors.green.shade50,
+                                            foregroundColor:
+                                                Colors.green.shade800,
+                                          ),
+                                          icon: const Icon(Icons.chat_outlined,
+                                              size: 18),
                                         ),
+                                      const SizedBox(width: 4),
                                       OutlinedButton(
                                         onPressed: () => _showDepositDialog(t),
                                         style: OutlinedButton.styleFrom(
