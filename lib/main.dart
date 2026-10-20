@@ -128,7 +128,7 @@ class RentTrackerHome extends StatefulWidget {
 }
 
 class _RentTrackerHomeState extends State<RentTrackerHome> {
-  static const String _storageKey = 'easyrent_flutter_v3';
+  static const String _storageKey = 'easyrent_flutter_v4';
 
   List<Tenant> _tenants = [];
   Map<String, Map<String, PaymentRecord>> _payments = {};
@@ -543,6 +543,119 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     );
   }
 
+  void _showMonthlyReportDialog() {
+    int monthCollected = 0;
+    int monthPending = 0;
+    int fullyPaidCount = 0;
+    int partialOrDueCount = 0;
+
+    for (final t in _tenants) {
+      final paid = _getPaidAmount(t.id);
+      monthCollected += paid;
+      final balance = (t.monthlyRent - paid).clamp(0, t.monthlyRent);
+      monthPending += balance;
+      if (paid >= t.monthlyRent) {
+        fullyPaidCount++;
+      } else {
+        partialOrDueCount++;
+      }
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Monthly Report: $_monthDisplay'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Total Tenants: ${_tenants.length}',
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    Text('Fully Paid: $fullyPaidCount',
+                        style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w600)),
+                    Text('Pending / Partial: $partialOrDueCount',
+                        style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Financial Summary:',
+                style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey.shade800),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Total Collected:'),
+                  Text('₹$monthCollected',
+                      style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Total Pending Due:'),
+                  Text('₹$monthPending',
+                      style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              const Divider(height: 24),
+              const Text(
+                'Tenant Breakdown:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              ..._tenants.map((t) {
+                final paid = _getPaidAmount(t.id);
+                final status = paid >= t.monthlyRent
+                    ? 'Paid (₹$paid)'
+                    : (paid > 0 ? 'Partial (Paid ₹$paid)' : 'Unpaid (Due ₹${t.monthlyRent})');
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text('${t.name} (${t.room})',
+                            style: const TextStyle(fontSize: 12),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      Text(status,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: paid >= t.monthlyRent ? Colors.green : Colors.deepOrange,
+                          )),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _copyReminder(Tenant tenant) {
     final paid = _getPaidAmount(tenant.id);
     final balance = (tenant.monthlyRent - paid).clamp(0, tenant.monthlyRent);
@@ -564,18 +677,22 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
 
   @override
   Widget build(BuildContext context) {
-    int totalExpected = 0;
     int totalCollected = 0;
     int totalDepositExpected = 0;
     int totalDepositCollected = 0;
 
     for (final t in _tenants) {
-      totalExpected += t.monthlyRent;
       totalCollected += _getPaidAmount(t.id);
       totalDepositExpected += t.depositAmount;
       totalDepositCollected += t.depositPaid;
     }
-    final int totalPending = (totalExpected - totalCollected).clamp(0, totalExpected);
+
+    int totalPending = 0;
+    for (final t in _tenants) {
+      final paid = _getPaidAmount(t.id);
+      totalPending += (t.monthlyRent - paid).clamp(0, t.monthlyRent);
+    }
+
     final int totalDepositPending =
         (totalDepositExpected - totalDepositCollected).clamp(0, totalDepositExpected);
 
@@ -602,13 +719,18 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
         surfaceTintColor: Colors.white,
         actions: [
           IconButton(
+            onPressed: _showMonthlyReportDialog,
+            icon: const Icon(Icons.bar_chart_rounded),
+            tooltip: 'Monthly Report',
+          ),
+          IconButton(
             onPressed: () => _changeMonth(-1),
             icon: const Icon(Icons.chevron_left),
           ),
           Center(
             child: Text(
               _monthDisplay,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
             ),
           ),
           IconButton(
@@ -619,14 +741,12 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
       ),
       body: Column(
         children: [
-          // Rent Summary Cards
+          // Rent Summary Cards (Without Expected Rent)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
             child: Row(
               children: [
-                _buildStatCard('Total Rent', '₹$totalExpected', Colors.blue.shade800),
-                const SizedBox(width: 8),
-                _buildStatCard('Collected', '₹$totalCollected', Colors.green.shade700),
+                _buildStatCard('Total Collected', '₹$totalCollected', Colors.green.shade700),
                 const SizedBox(width: 8),
                 _buildStatCard('Pending Due', '₹$totalPending', Colors.red.shade700),
               ],
