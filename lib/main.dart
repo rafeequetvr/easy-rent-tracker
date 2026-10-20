@@ -28,7 +28,9 @@ class EasyRentApp extends StatelessWidget {
 class Tenant {
   final String id;
   final String name;
+  final String floor;
   final String room;
+  final String bed;
   final String phone;
   final int monthlyRent;
   final int dueDay;
@@ -38,7 +40,9 @@ class Tenant {
   Tenant({
     required this.id,
     required this.name,
+    required this.floor,
     required this.room,
+    required this.bed,
     required this.phone,
     required this.monthlyRent,
     required this.dueDay,
@@ -49,7 +53,9 @@ class Tenant {
   Tenant copyWith({
     String? id,
     String? name,
+    String? floor,
     String? room,
+    String? bed,
     String? phone,
     int? monthlyRent,
     int? dueDay,
@@ -59,7 +65,9 @@ class Tenant {
     return Tenant(
       id: id ?? this.id,
       name: name ?? this.name,
+      floor: floor ?? this.floor,
       room: room ?? this.room,
+      bed: bed ?? this.bed,
       phone: phone ?? this.phone,
       monthlyRent: monthlyRent ?? this.monthlyRent,
       dueDay: dueDay ?? this.dueDay,
@@ -71,7 +79,9 @@ class Tenant {
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
+        'floor': floor,
         'room': room,
+        'bed': bed,
         'phone': phone,
         'monthlyRent': monthlyRent,
         'dueDay': dueDay,
@@ -82,7 +92,9 @@ class Tenant {
   factory Tenant.fromJson(Map<String, dynamic> json) => Tenant(
         id: json['id'],
         name: json['name'],
-        room: json['room'],
+        floor: json['floor'] ?? 'Ground Floor',
+        room: json['room'] ?? '',
+        bed: json['bed'] ?? 'Bed 1',
         phone: json['phone'] ?? '',
         monthlyRent: json['monthlyRent'] ?? 0,
         dueDay: json['dueDay'] ?? 5,
@@ -116,10 +128,9 @@ class RentTrackerHome extends StatefulWidget {
 }
 
 class _RentTrackerHomeState extends State<RentTrackerHome> {
-  static const String _storageKey = 'easyrent_flutter_v2';
+  static const String _storageKey = 'easyrent_flutter_v3';
 
   List<Tenant> _tenants = [];
-  // Format: { "YYYY-MM": { "tenantId": PaymentRecord } }
   Map<String, Map<String, PaymentRecord>> _payments = {};
 
   DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
@@ -164,12 +175,13 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
         });
       });
     } else {
-      // Sample Data in English
       _tenants = [
         Tenant(
           id: '1',
           name: 'Rahul Nair',
-          room: '101-A',
+          floor: '1st Floor',
+          room: 'Room 101',
+          bed: 'Bed A',
           phone: '9876543210',
           monthlyRent: 8000,
           dueDay: 5,
@@ -179,7 +191,9 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
         Tenant(
           id: '2',
           name: 'Ajay Krishnan',
-          room: '102-B',
+          floor: '2nd Floor',
+          room: 'Room 202',
+          bed: 'Bed B',
           phone: '9811223344',
           monthlyRent: 7500,
           dueDay: 5,
@@ -253,7 +267,7 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('${tenant.name} (${tenant.room}) - Rent'),
+        title: Text('${tenant.name} (${tenant.room} - ${tenant.bed}) - Rent'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -398,19 +412,22 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     );
   }
 
-  void _showAddTenantDialog() {
-    final nameCtrl = TextEditingController();
-    final roomCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final rentCtrl = TextEditingController();
-    final dueCtrl = TextEditingController(text: '5');
-    final depositTotalCtrl = TextEditingController();
-    final depositPaidCtrl = TextEditingController();
+  void _showTenantFormDialog({Tenant? tenantToEdit}) {
+    final isEditing = tenantToEdit != null;
+    final nameCtrl = TextEditingController(text: tenantToEdit?.name ?? '');
+    final floorCtrl = TextEditingController(text: tenantToEdit?.floor ?? 'Ground Floor');
+    final roomCtrl = TextEditingController(text: tenantToEdit?.room ?? '');
+    final bedCtrl = TextEditingController(text: tenantToEdit?.bed ?? 'Bed 1');
+    final phoneCtrl = TextEditingController(text: tenantToEdit?.phone ?? '');
+    final rentCtrl = TextEditingController(text: tenantToEdit?.monthlyRent.toString() ?? '');
+    final dueCtrl = TextEditingController(text: tenantToEdit?.dueDay.toString() ?? '5');
+    final depositTotalCtrl = TextEditingController(text: tenantToEdit?.depositAmount.toString() ?? '');
+    final depositPaidCtrl = TextEditingController(text: tenantToEdit?.depositPaid.toString() ?? '');
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Add New Tenant'),
+        title: Text(isEditing ? 'Edit Tenant Details' : 'Add New Tenant'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -421,8 +438,18 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
               ),
               const SizedBox(height: 8),
               TextField(
+                controller: floorCtrl,
+                decoration: const InputDecoration(labelText: 'Floor (e.g. Ground Floor, 1st Floor)'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
                 controller: roomCtrl,
-                decoration: const InputDecoration(labelText: 'Room / Bed No. (e.g. 101-A)'),
+                decoration: const InputDecoration(labelText: 'Room Number (e.g. Room 101)'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: bedCtrl,
+                decoration: const InputDecoration(labelText: 'Bed Number / Identifier (e.g. Bed A)'),
               ),
               const SizedBox(height: 8),
               TextField(
@@ -446,7 +473,7 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
               TextField(
                 controller: depositPaidCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Initial Deposit Paid (₹)'),
+                decoration: const InputDecoration(labelText: 'Deposit Paid (₹)'),
               ),
               const SizedBox(height: 8),
               TextField(
@@ -465,7 +492,9 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
           FilledButton(
             onPressed: () {
               final name = nameCtrl.text.trim();
+              final floor = floorCtrl.text.trim();
               final room = roomCtrl.text.trim();
+              final bed = bedCtrl.text.trim();
               final rent = int.tryParse(rentCtrl.text.trim()) ?? 0;
               final due = int.tryParse(dueCtrl.text.trim()) ?? 5;
               final depTotal = int.tryParse(depositTotalCtrl.text.trim()) ?? 0;
@@ -473,22 +502,41 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
 
               if (name.isNotEmpty && room.isNotEmpty && rent > 0) {
                 setState(() {
-                  _tenants.add(Tenant(
-                    id: DateTime.now().millisecondsSinceEpoch.toString(),
-                    name: name,
-                    room: room,
-                    phone: phoneCtrl.text.trim(),
-                    monthlyRent: rent,
-                    dueDay: due.clamp(1, 31),
-                    depositAmount: depTotal,
-                    depositPaid: depPaid.clamp(0, depTotal > 0 ? depTotal : 1000000),
-                  ));
+                  if (isEditing) {
+                    final index = _tenants.indexWhere((t) => t.id == tenantToEdit.id);
+                    if (index != -1) {
+                      _tenants[index] = tenantToEdit.copyWith(
+                        name: name,
+                        floor: floor.isEmpty ? 'Ground Floor' : floor,
+                        room: room,
+                        bed: bed.isEmpty ? 'Bed 1' : bed,
+                        phone: phoneCtrl.text.trim(),
+                        monthlyRent: rent,
+                        dueDay: due.clamp(1, 31),
+                        depositAmount: depTotal,
+                        depositPaid: depPaid.clamp(0, depTotal > 0 ? depTotal : 1000000),
+                      );
+                    }
+                  } else {
+                    _tenants.add(Tenant(
+                      id: DateTime.now().millisecondsSinceEpoch.toString(),
+                      name: name,
+                      floor: floor.isEmpty ? 'Ground Floor' : floor,
+                      room: room,
+                      bed: bed.isEmpty ? 'Bed 1' : bed,
+                      phone: phoneCtrl.text.trim(),
+                      monthlyRent: rent,
+                      dueDay: due.clamp(1, 31),
+                      depositAmount: depTotal,
+                      depositPaid: depPaid.clamp(0, depTotal > 0 ? depTotal : 1000000),
+                    ));
+                  }
                 });
                 _saveData();
                 Navigator.pop(context);
               }
             },
-            child: const Text('Add Tenant'),
+            child: Text(isEditing ? 'Save Changes' : 'Add Tenant'),
           ),
         ],
       ),
@@ -501,8 +549,8 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
     final depBalance = (tenant.depositAmount - tenant.depositPaid).clamp(0, tenant.depositAmount);
 
     String msg = paid > 0
-        ? 'Hello ${tenant.name} (Room ${tenant.room}), out of your $_monthDisplay rent of ₹${tenant.monthlyRent}, we have received ₹$paid. Kindly pay the remaining balance of ₹$balance soon.'
-        : 'Hello ${tenant.name} (Room ${tenant.room}), your rent of ₹${tenant.monthlyRent} for $_monthDisplay is due by the ${tenant.dueDay}th of this month. Kindly make the payment on time.';
+        ? 'Hello ${tenant.name} (${tenant.floor}, ${tenant.room} - ${tenant.bed}), out of your $_monthDisplay rent of ₹${tenant.monthlyRent}, we have received ₹$paid. Kindly pay the remaining balance of ₹$balance soon.'
+        : 'Hello ${tenant.name} (${tenant.floor}, ${tenant.room} - ${tenant.bed}), your rent of ₹${tenant.monthlyRent} for $_monthDisplay is due by the ${tenant.dueDay}th of this month. Kindly make the payment on time.';
 
     if (depBalance > 0) {
       msg += ' Also, your pending security deposit balance is ₹$depBalance.';
@@ -541,7 +589,10 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
       if (_filter == 'deposit_due' && depPending <= 0) return false;
 
       final q = _searchQuery.toLowerCase();
-      return t.name.toLowerCase().contains(q) || t.room.toLowerCase().contains(q);
+      return t.name.toLowerCase().contains(q) ||
+          t.room.toLowerCase().contains(q) ||
+          t.floor.toLowerCase().contains(q) ||
+          t.bed.toLowerCase().contains(q);
     }).toList();
 
     return Scaffold(
@@ -632,7 +683,7 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
             child: TextField(
               onChanged: (v) => setState(() => _searchQuery = v),
               decoration: InputDecoration(
-                hintText: 'Search by tenant name or room number...',
+                hintText: 'Search by name, room, floor or bed...',
                 prefixIcon: const Icon(Icons.search),
                 filled: true,
                 fillColor: Colors.white,
@@ -731,23 +782,35 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
                                           borderRadius: BorderRadius.circular(6),
                                         ),
                                         child: Text(
-                                          t.room,
+                                          '${t.floor} • ${t.room} (${t.bed})',
                                           style: TextStyle(
                                             color: Colors.indigo.shade800,
                                             fontWeight: FontWeight.bold,
-                                            fontSize: 12,
+                                            fontSize: 11,
                                           ),
                                         ),
                                       ),
                                     ],
                                   ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete_outline, size: 20),
-                                    color: Colors.grey,
-                                    onPressed: () {
-                                      setState(() => _tenants.removeWhere((x) => x.id == t.id));
-                                      _saveData();
-                                    },
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(Icons.edit_outlined, size: 18),
+                                        color: Colors.grey.shade700,
+                                        tooltip: 'Edit Tenant',
+                                        onPressed: () => _showTenantFormDialog(tenantToEdit: t),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.delete_outline, size: 18),
+                                        color: Colors.grey,
+                                        tooltip: 'Delete Tenant',
+                                        onPressed: () {
+                                          setState(() => _tenants.removeWhere((x) => x.id == t.id));
+                                          _saveData();
+                                        },
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
@@ -862,7 +925,7 @@ class _RentTrackerHomeState extends State<RentTrackerHome> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddTenantDialog,
+        onPressed: () => _showTenantFormDialog(),
         icon: const Icon(Icons.person_add),
         label: const Text('Add Tenant'),
       ),
