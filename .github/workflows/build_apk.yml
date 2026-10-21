@@ -1,42 +1,43 @@
-name: Build EasyRent APK
+name: Build Flutter APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Flutter
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Generate Flutter Project & Add Dependencies
+      - name: Create Flutter project structure & add packages
         run: |
-          cp lib/main.dart /tmp/main.dart
-          flutter create --project-name easy_rent_tracker --org com.easyrent.tracker .
-          cp /tmp/main.dart lib/main.dart
-          sed -i 's/android:label="easy_rent_tracker"/android:label="EasyRent Tracker"/g' android/app/src/main/AndroidManifest.xml
-          flutter pub add shared_preferences path_provider share_plus file_picker url_launcher
-          flutter pub get
+          mkdir temp_code
+          cp -r lib/* temp_code/
+          flutter create --org com.easyrent.tracker --project-name easyrent_tracker .
+          cp -r temp_code/* lib/
+          rm -rf temp_code
+          flutter pub add shared_preferences share_plus
 
-      - name: Build Release APK
-        run: flutter build apk --release
+      - name: Build Release APK with Auto Version
+        run: flutter build apk --release --build-number=${{ github.run_number }}
 
-      - name: Upload APK
+      - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: EasyRent-APK
+          name: EasyRent-Release-APK
           path: build/app/outputs/flutter-apk/app-release.apk
