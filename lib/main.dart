@@ -126,6 +126,36 @@ class ExpenseItem {
       );
 }
 
+class LogEntry {
+  String id, title, subtitle, type, time, tenantId;
+  LogEntry({
+    required this.id,
+    required this.title,
+    required this.subtitle,
+    required this.type,
+    required this.time,
+    this.tenantId = '',
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'subtitle': subtitle,
+        'type': type,
+        'time': time,
+        'tenantId': tenantId,
+      };
+
+  factory LogEntry.fromJson(Map<String, dynamic> j) => LogEntry(
+        id: '${j['id'] ?? ''}',
+        title: '${j['title'] ?? ''}',
+        subtitle: '${j['subtitle'] ?? ''}',
+        type: '${j['type'] ?? 'info'}',
+        time: '${j['time'] ?? ''}',
+        tenantId: '${j['tenantId'] ?? ''}',
+      );
+}
+
 class PropertyHome extends StatefulWidget {
   const PropertyHome({super.key});
   @override
@@ -137,9 +167,10 @@ class _PropertyHomeState extends State<PropertyHome> {
   List<RoomModel> _rooms = [];
   List<Tenant> _tenants = [];
   List<ExpenseItem> _expenses = [];
+  List<LogEntry> _logs = [];
   Map<String, Map<String, dynamic>> _payments = {};
   DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
-  String _tab = 'rooms';
+  String _tab = 'rooms'; // 'floors', 'rooms', 'expenses', 'history'
   String? _selectedFloor;
 
   @override
@@ -154,6 +185,28 @@ class _PropertyHomeState extends State<PropertyHome> {
 
   int _paid(String tId) => int.tryParse('${_payments[_mKey]?[tId]?['paid'] ?? 0}') ?? 0;
 
+  String _nowStamp() {
+    final n = DateTime.now();
+    final hr = n.hour > 12 ? n.hour - 12 : (n.hour == 0 ? 12 : n.hour);
+    final ampm = n.hour >= 12 ? 'PM' : 'AM';
+    return '${n.day}/${n.month}/${n.year} $hr:${n.minute.toString().padLeft(2, '0')} $ampm';
+  }
+
+  void _addLog(String title, String subtitle, String type, {String tenantId = ''}) {
+    _logs.insert(
+      0,
+      LogEntry(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        title: title,
+        subtitle: subtitle,
+        type: type, // 'rent', 'deposit', 'expense', 'info'
+        time: _nowStamp(),
+        tenantId: tenantId,
+      ),
+    );
+    if (_logs.length > 500) _logs.removeLast();
+  }
+
   bool _isOverdue(Tenant t) {
     final paid = _paid(t.id);
     if (paid >= t.monthlyRent) return false;
@@ -164,7 +217,6 @@ class _PropertyHomeState extends State<PropertyHome> {
     return now.day >= t.dueDay;
   }
 
-  // Permanent internal storage files using pure dart:io (never fails in release APK)
   List<File> _getStorageFiles() {
     final List<File> list = [];
     try {
@@ -189,7 +241,6 @@ class _PropertyHomeState extends State<PropertyHome> {
   }
 
   Future<void> _loadData() async {
-    // 1. Try reading from permanent internal file storage first
     for (final f in _getStorageFiles()) {
       try {
         if (f.existsSync()) {
@@ -202,7 +253,6 @@ class _PropertyHomeState extends State<PropertyHome> {
       } catch (_) {}
     }
 
-    // 2. Fallback: Try reading from SharedPreferences
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_storageKey);
@@ -212,7 +262,6 @@ class _PropertyHomeState extends State<PropertyHome> {
       }
     } catch (_) {}
 
-    // 3. First time setup only
     _rooms = [
       RoomModel(id: 'r1', name: 'Room F1', floor: 'First Floor', totalBeds: 4, defaultRent: 4000),
       RoomModel(id: 'r2', name: 'Room F2', floor: 'First Floor', totalBeds: 6, defaultRent: 4000),
@@ -232,18 +281,17 @@ class _PropertyHomeState extends State<PropertyHome> {
       'rooms': _rooms.map((r) => r.toJson()).toList(),
       'tenants': _tenants.map((t) => t.toJson()).toList(),
       'expenses': _expenses.map((e) => e.toJson()).toList(),
+      'logs': _logs.map((l) => l.toJson()).toList(),
       'payments': _payments,
     };
     final jsonStr = jsonEncode(data);
 
-    // Save synchronously to internal files immediately
     for (final f in _getStorageFiles()) {
       try {
         f.writeAsStringSync(jsonStr, flush: true);
       } catch (_) {}
     }
 
-    // Also save to SharedPreferences in background
     SharedPreferences.getInstance().then((prefs) {
       prefs.setString(_storageKey, jsonStr);
     }).catchError((_) {});
@@ -272,6 +320,11 @@ class _PropertyHomeState extends State<PropertyHome> {
         if (item is Map) loadedExpenses.add(ExpenseItem.fromJson(Map<String, dynamic>.from(item)));
       }
 
+      final List<LogEntry> loadedLogs = [];
+      for (final item in (d['logs'] as List? ?? [])) {
+        if (item is Map) loadedLogs.add(LogEntry.fromJson(Map<String, dynamic>.from(item)));
+      }
+
       final Map<String, Map<String, dynamic>> loadedPayments = {};
       final rawPayments = d['payments'];
       if (rawPayments is Map) {
@@ -289,6 +342,7 @@ class _PropertyHomeState extends State<PropertyHome> {
       _rooms = loadedRooms;
       _tenants = loadedTenants;
       _expenses = loadedExpenses;
+      _logs = loadedLogs;
       _payments = loadedPayments;
 
       if (saveAfter) _saveData();
@@ -335,9 +389,10 @@ class _PropertyHomeState extends State<PropertyHome> {
                 final amt = int.tryParse(amtC.text.trim()) ?? 0;
                 if (amt <= 0) return;
                 final now = DateTime.now();
+                final title = titleC.text.trim().isEmpty ? cat : titleC.text.trim();
                 final item = ExpenseItem(
                   id: isEdit ? exp.id : now.millisecondsSinceEpoch.toString(),
-                  title: titleC.text.trim().isEmpty ? cat : titleC.text.trim(),
+                  title: title,
                   category: cat,
                   amount: amt,
                   date: isEdit ? exp.date : '${now.day}/${now.month}/${now.year}',
@@ -345,8 +400,10 @@ class _PropertyHomeState extends State<PropertyHome> {
                 );
                 if (isEdit) {
                   _expenses[_expenses.indexWhere((x) => x.id == exp.id)] = item;
+                  _addLog('Expense Edited: $title', 'Amount: -₹$amt ($cat)', 'expense');
                 } else {
                   _expenses.add(item);
+                  _addLog('Expense Added: $title', 'Amount: -₹$amt ($cat • $_mName)', 'expense');
                 }
                 _saveData();
                 Navigator.pop(context);
@@ -385,6 +442,7 @@ class _PropertyHomeState extends State<PropertyHome> {
           if (isEdit)
             TextButton(
               onPressed: () {
+                _addLog('Room Deleted: ${room.name}', 'Floor: ${room.floor}', 'info');
                 _tenants.removeWhere((t) => t.roomId == room.id);
                 _rooms.removeWhere((r) => r.id == room.id);
                 _saveData();
@@ -405,8 +463,10 @@ class _PropertyHomeState extends State<PropertyHome> {
               );
               if (isEdit) {
                 _rooms[_rooms.indexWhere((x) => x.id == room.id)] = newR;
+                _addLog('Room Updated: ${newR.name}', '${newR.totalBeds} beds • ₹${newR.defaultRent}/bed', 'info');
               } else {
                 _rooms.add(newR);
+                _addLog('New Room Created: ${newR.name}', '${newR.floor} • ${newR.totalBeds} beds', 'info');
               }
               _saveData();
               Navigator.pop(context);
@@ -428,6 +488,7 @@ class _PropertyHomeState extends State<PropertyHome> {
     final isOverdue = _isOverdue(t);
     final rentCtrl = TextEditingController();
     final depCtrl = TextEditingController();
+    final tenantLogs = _logs.where((l) => l.tenantId == t.id).take(8).toList();
 
     showDialog(
       context: context,
@@ -443,66 +504,108 @@ class _PropertyHomeState extends State<PropertyHome> {
           IconButton(
               icon: const Icon(Icons.person_remove_outlined, color: Colors.red, size: 20),
               onPressed: () {
+                _addLog('Tenant Vacated: ${t.name}', '${room.name} (Bed ${bedIdx + 1})', 'info', tenantId: t.id);
                 _tenants.removeWhere((x) => x.id == t.id);
                 _saveData();
                 Navigator.pop(context);
               }),
         ]),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Monthly Rent: ₹${t.monthlyRent} • Due Day: ${t.dueDay}th'),
-                Text('Paid ($_mName): ₹$paid • Balance: ₹$bal',
-                    style: TextStyle(fontWeight: FontWeight.bold, color: bal == 0 ? Colors.green : (isOverdue ? Colors.red : Colors.blue))),
-                if (!isOverdue && bal > 0) Text('Status: Upcoming (Due on ${t.dueDay}th)', style: const TextStyle(fontSize: 12, color: Colors.blue)),
-                const Divider(),
-                Text('Deposit Held: ₹${t.depositPaid} / ₹${t.depositAmount} ${depBal > 0 ? "(Due: ₹$depBal)" : "✓"}',
-                    style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.teal)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Monthly Rent: ₹${t.monthlyRent} • Due Day: ${t.dueDay}th'),
+                  Text('Paid ($_mName): ₹$paid • Balance: ₹$bal',
+                      style: TextStyle(fontWeight: FontWeight.bold, color: bal == 0 ? Colors.green : (isOverdue ? Colors.red : Colors.blue))),
+                  if (!isOverdue && bal > 0) Text('Status: Upcoming (Due on ${t.dueDay}th)', style: const TextStyle(fontSize: 12, color: Colors.blue)),
+                  const Divider(),
+                  Text('Deposit Held: ₹${t.depositPaid} / ₹${t.depositAmount} ${depBal > 0 ? "(Due: ₹$depBal)" : "✓"}',
+                      style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.teal)),
+                ]),
+              ),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(child: TextField(controller: rentCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Add Rent (₹)', isDense: true, border: OutlineInputBorder()))),
+                const SizedBox(width: 6),
+                FilledButton(
+                    onPressed: () {
+                      final add = int.tryParse(rentCtrl.text) ?? 0;
+                      if (add > 0) {
+                        final newPaid = (paid + add).clamp(0, t.monthlyRent * 2);
+                        _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': newPaid};
+                        _addLog('Rent Received: +₹$add', '${t.name} (${room.name}) • $_mName (Total Paid: ₹$newPaid)', 'rent', tenantId: t.id);
+                        _saveData();
+                      }
+                      Navigator.pop(context);
+                    },
+                    child: const Text('Add')),
+                const SizedBox(width: 4),
+                OutlinedButton(
+                    onPressed: () {
+                      _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': t.monthlyRent};
+                      _addLog('Full Rent Paid: +₹${t.monthlyRent}', '${t.name} (${room.name}) • $_mName', 'rent', tenantId: t.id);
+                      _saveData();
+                      Navigator.pop(context);
+                    },
+                    child: const Text('Full')),
               ]),
-            ),
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(child: TextField(controller: rentCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Add Rent (₹)', isDense: true, border: OutlineInputBorder()))),
-              const SizedBox(width: 6),
-              FilledButton(
-                  onPressed: () {
-                    final add = int.tryParse(rentCtrl.text) ?? 0;
-                    _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': (paid + add).clamp(0, t.monthlyRent * 2)};
-                    _saveData();
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Add')),
-              const SizedBox(width: 4),
-              OutlinedButton(
-                  onPressed: () {
-                    _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': t.monthlyRent};
-                    _saveData();
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Full')),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(child: TextField(controller: depCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Add Deposit (₹)', isDense: true, border: OutlineInputBorder()))),
+                const SizedBox(width: 6),
+                FilledButton.tonal(
+                    onPressed: () {
+                      final add = int.tryParse(depCtrl.text) ?? 0;
+                      if (add > 0) {
+                        t.depositPaid = (t.depositPaid + add).clamp(0, 999999);
+                        _addLog('Deposit Received: +₹$add', '${t.name} (${room.name}) • Total Dep: ₹${t.depositPaid}', 'deposit', tenantId: t.id);
+                        _saveData();
+                      }
+                      Navigator.pop(context);
+                    },
+                    child: const Text('Add Dep')),
+              ]),
+              if (tenantLogs.isNotEmpty) ...[
+                const Divider(height: 22),
+                const Text('Recent Activity / Payment History:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.black87)),
+                const SizedBox(height: 6),
+                ...tenantLogs.map((l) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            l.type == 'rent' ? Icons.check_circle_outline : (l.type == 'deposit' ? Icons.shield_outlined : Icons.history),
+                            size: 14,
+                            color: l.type == 'rent' ? Colors.green : Colors.teal,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(l.title, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                                Text('${l.subtitle} • ${l.time}', style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )),
+              ],
             ]),
-            const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: TextField(controller: depCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Add Deposit (₹)', isDense: true, border: OutlineInputBorder()))),
-              const SizedBox(width: 6),
-              FilledButton.tonal(
-                  onPressed: () {
-                    t.depositPaid = (t.depositPaid + (int.tryParse(depCtrl.text) ?? 0)).clamp(0, 999999);
-                    _saveData();
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Add Dep')),
-            ]),
-          ]),
+          ),
         ),
         actions: [
           if (paid > 0)
             TextButton(
                 onPressed: () {
                   _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': 0};
+                  _addLog('Rent Reset to ₹0', '${t.name} (${room.name}) • $_mName', 'info', tenantId: t.id);
                   _saveData();
                   Navigator.pop(context);
                 },
@@ -570,8 +673,10 @@ class _PropertyHomeState extends State<PropertyHome> {
                 );
                 if (isEdit) {
                   _tenants[_tenants.indexWhere((x) => x.id == t.id)] = newT;
+                  _addLog('Tenant Edited: ${newT.name}', '${room.name} (Bed ${bedIdx + 1}) • Rent: ₹${newT.monthlyRent}', 'info', tenantId: newT.id);
                 } else {
                   _tenants.add(newT);
+                  _addLog('New Tenant Joined: ${newT.name}', '${room.name} (Bed ${bedIdx + 1}) • Dep Paid: ₹${newT.depositPaid}', 'deposit', tenantId: newT.id);
                 }
                 _saveData();
                 Navigator.pop(context);
@@ -614,6 +719,13 @@ class _PropertyHomeState extends State<PropertyHome> {
       }
     }
 
+    if (_logs.isNotEmpty) {
+      sb.writeln('\n=== RECENT ACTIVITY LOGS ===');
+      for (final l in _logs.take(15)) {
+        sb.writeln('  • [${l.time}] ${l.title} - ${l.subtitle}');
+      }
+    }
+
     final net = col - totalExp;
     final header =
         'Rent Collected: ₹$col | Expenses: ₹$totalExp\nNet Profit/Balance: ₹$net\nOverdue Rent: ₹$due | Upcoming: ₹$upcoming\n-----------------------------------------';
@@ -644,6 +756,7 @@ class _PropertyHomeState extends State<PropertyHome> {
       'rooms': _rooms.map((r) => r.toJson()).toList(),
       'tenants': _tenants.map((t) => t.toJson()).toList(),
       'expenses': _expenses.map((e) => e.toJson()).toList(),
+      'logs': _logs.map((l) => l.toJson()).toList(),
       'payments': _payments,
     });
     final ctrl = TextEditingController();
@@ -674,6 +787,29 @@ class _PropertyHomeState extends State<PropertyHome> {
                 },
                 child: const Text('Restore Now')),
           ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _segTab(String key, String label, {bool isFirst = false, bool isLast = false}) {
+    final sel = _tab == key;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() {
+          _tab = key;
+          if (key == 'rooms') _selectedFloor = null;
+        }),
+        child: Container(
+          decoration: BoxDecoration(
+            color: sel ? const Color(0xFFDCE2F9) : Colors.transparent,
+            borderRadius: BorderRadius.horizontal(
+              left: isFirst ? const Radius.circular(24) : Radius.zero,
+              right: isLast ? const Radius.circular(24) : Radius.zero,
+            ),
+          ),
+          alignment: Alignment.center,
+          child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
         ),
       ),
     );
@@ -726,6 +862,7 @@ class _PropertyHomeState extends State<PropertyHome> {
             ),
           ),
         ),
+        // 4-Tab Pill Bar: Floors | Rooms | Expenses | History
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
           child: Container(
@@ -736,47 +873,13 @@ class _PropertyHomeState extends State<PropertyHome> {
               border: Border.all(color: Colors.grey.shade400),
             ),
             child: Row(children: [
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _tab = 'floors'),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: _tab == 'floors' ? const Color(0xFFDCE2F9) : Colors.transparent,
-                      borderRadius: const BorderRadius.horizontal(left: Radius.circular(24)),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Text('Floors', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                  ),
-                ),
-              ),
+              _segTab('floors', 'Floors', isFirst: true),
               Container(width: 1, color: Colors.grey.shade400),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() {
-                    _tab = 'rooms';
-                    _selectedFloor = null;
-                  }),
-                  child: Container(
-                    color: _tab == 'rooms' ? const Color(0xFFDCE2F9) : Colors.transparent,
-                    alignment: Alignment.center,
-                    child: const Text('Rooms', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                  ),
-                ),
-              ),
+              _segTab('rooms', 'Rooms'),
               Container(width: 1, color: Colors.grey.shade400),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _tab = 'expenses'),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: _tab == 'expenses' ? const Color(0xFFDCE2F9) : Colors.transparent,
-                      borderRadius: const BorderRadius.horizontal(right: Radius.circular(24)),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Text('Expenses', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                  ),
-                ),
-              ),
+              _segTab('expenses', 'Expenses'),
+              Container(width: 1, color: Colors.grey.shade400),
+              _segTab('history', 'History', isLast: true),
             ]),
           ),
         ),
@@ -844,6 +947,7 @@ class _PropertyHomeState extends State<PropertyHome> {
                                     IconButton(
                                       icon: const Icon(Icons.delete_outline, size: 18, color: Colors.grey),
                                       onPressed: () {
+                                        _addLog('Expense Deleted: ${e.title}', '₹${e.amount}', 'info');
                                         _expenses.removeWhere((x) => x.id == e.id);
                                         _saveData();
                                       },
@@ -854,21 +958,82 @@ class _PropertyHomeState extends State<PropertyHome> {
                             );
                           },
                         ))
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
-                      itemCount: visibleRooms.length,
-                      itemBuilder: (_, i) => _buildRoomCard(visibleRooms[i]),
-                    ),
+                  : _tab == 'history'
+                      ? (_logs.isEmpty
+                          ? const Center(child: Text('No activity or payment history yet.'))
+                          : ListView.builder(
+                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
+                              itemCount: _logs.length,
+                              itemBuilder: (_, i) {
+                                final l = _logs[i];
+                                final isRent = l.type == 'rent';
+                                final isDep = l.type == 'deposit';
+                                final isExp = l.type == 'expense';
+                                final Color c = isRent
+                                    ? Colors.green.shade700
+                                    : (isDep ? Colors.teal.shade700 : (isExp ? Colors.red.shade700 : Colors.blue.shade700));
+                                final Color bg = isRent
+                                    ? Colors.green.shade50
+                                    : (isDep ? Colors.teal.shade50 : (isExp ? Colors.red.shade50 : Colors.blue.shade50));
+                                final IconData ic = isRent
+                                    ? Icons.payments_outlined
+                                    : (isDep ? Icons.shield_outlined : (isExp ? Icons.money_off_csred_outlined : Icons.history));
+
+                                return Card(
+                                  color: Colors.white,
+                                  elevation: 0,
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: BorderSide(color: Colors.grey.shade200)),
+                                  child: ListTile(
+                                    dense: true,
+                                    leading: Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
+                                      child: Icon(ic, color: c, size: 20),
+                                    ),
+                                    title: Text(l.title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: c)),
+                                    subtitle: Text('${l.subtitle}\n${l.time}', style: const TextStyle(fontSize: 11, height: 1.3)),
+                                    isThreeLine: true,
+                                    trailing: IconButton(
+                                      icon: const Icon(Icons.close, size: 16, color: Colors.grey),
+                                      onPressed: () {
+                                        _logs.removeAt(i);
+                                        _saveData();
+                                      },
+                                    ),
+                                  ),
+                                );
+                              },
+                            ))
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
+                          itemCount: visibleRooms.length,
+                          itemBuilder: (_, i) => _buildRoomCard(visibleRooms[i]),
+                        ),
         ),
       ]),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: const Color(0xFFDCE2F9),
-        foregroundColor: const Color(0xFF1E3A8A),
-        elevation: 2,
-        onPressed: () => _tab == 'expenses' ? _showExpenseDialog() : _showRoomDialog(),
-        icon: const Icon(Icons.add),
-        label: Text(_tab == 'expenses' ? 'Add expense' : 'Add room', style: const TextStyle(fontWeight: FontWeight.w600)),
-      ),
+      floatingActionButton: _tab == 'history'
+          ? (_logs.isEmpty
+              ? null
+              : FloatingActionButton.extended(
+                  backgroundColor: Colors.red.shade50,
+                  foregroundColor: Colors.red.shade800,
+                  elevation: 1,
+                  onPressed: () {
+                    _logs.clear();
+                    _saveData();
+                  },
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  label: const Text('Clear Logs', style: TextStyle(fontWeight: FontWeight.w600)),
+                ))
+          : FloatingActionButton.extended(
+              backgroundColor: const Color(0xFFDCE2F9),
+              foregroundColor: const Color(0xFF1E3A8A),
+              elevation: 2,
+              onPressed: () => _tab == 'expenses' ? _showExpenseDialog() : _showRoomDialog(),
+              icon: const Icon(Icons.add),
+              label: Text(_tab == 'expenses' ? 'Add expense' : 'Add room', style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
     );
   }
 
