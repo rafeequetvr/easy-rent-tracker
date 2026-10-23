@@ -5,6 +5,9 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,6 +21,21 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
+
+      - name: Setup Permanent Signing Key (Fixes Package Conflict)
+        run: |
+          mkdir -p ~/.android
+          if [ -f "app_key.keystore" ]; then
+            cp app_key.keystore ~/.android/debug.keystore
+          else
+            keytool -genkey -v -keystore app_key.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            cp app_key.keystore ~/.android/debug.keystore
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add app_key.keystore
+            git commit -m "Save permanent signing key for updates [skip ci]" || true
+            git push || true
+          fi
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
