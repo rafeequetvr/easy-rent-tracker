@@ -22,7 +22,12 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Permanent Signing Key (Fixes Package Conflict)
+      - name: Fix Android SDK Permissions & Accept Licenses
+        run: |
+          sudo chmod -R 777 $ANDROID_HOME
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Setup Permanent Signing Key
         run: |
           mkdir -p ~/.android
           if [ -f "app_key.keystore" ]; then
@@ -33,7 +38,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add app_key.keystore
-            git commit -m "Save permanent signing key for updates [skip ci]" || true
+            git commit -m "Save permanent signing key [skip ci]" || true
             git push || true
           fi
 
