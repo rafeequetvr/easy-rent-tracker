@@ -199,7 +199,7 @@ class _PropertyHomeState extends State<PropertyHome> {
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         title: title,
         subtitle: subtitle,
-        type: type, // 'rent', 'deposit', 'expense', 'info'
+        type: type,
         time: _nowStamp(),
         tenantId: tenantId,
       ),
@@ -356,10 +356,13 @@ class _PropertyHomeState extends State<PropertyHome> {
 
   void _msg(String txt) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
 
+  // Complete Add & Edit Expense Dialog (with Category, Title, Amount, Date Picker & Delete)
   void _showExpenseDialog({ExpenseItem? exp}) {
     final isEdit = exp != null;
+    final now = DateTime.now();
     final titleC = TextEditingController(text: exp?.title ?? '');
     final amtC = TextEditingController(text: exp != null ? '${exp.amount}' : '');
+    final dateC = TextEditingController(text: exp?.date ?? '${now.day}/${now.month}/${now.year}');
     String cat = exp?.category ?? 'Electricity';
     const categories = ['Electricity', 'Water', 'Maintenance', 'Wifi', 'Cleaning', 'Salary', 'Other'];
 
@@ -377,30 +380,73 @@ class _PropertyHomeState extends State<PropertyHome> {
                 onChanged: (v) => setSt(() => cat = v ?? 'Other'),
               ),
               const SizedBox(height: 10),
-              TextField(controller: titleC, decoration: const InputDecoration(labelText: 'Description / Note', border: OutlineInputBorder(), isDense: true)),
+              TextField(
+                controller: titleC,
+                decoration: const InputDecoration(labelText: 'Description / Note (e.g. KSEB Bill)', border: OutlineInputBorder(), isDense: true),
+              ),
               const SizedBox(height: 10),
-              TextField(controller: amtC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Amount (₹)', border: OutlineInputBorder(), isDense: true)),
+              TextField(
+                controller: amtC,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Amount (₹)', prefixText: '₹ ', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: dateC,
+                decoration: InputDecoration(
+                  labelText: 'Expense Date (DD/MM/YYYY)',
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.calendar_today_outlined, size: 18),
+                    onPressed: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: now,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2035),
+                      );
+                      if (picked != null) {
+                        setSt(() => dateC.text = '${picked.day}/${picked.month}/${picked.year}');
+                      }
+                    },
+                  ),
+                ),
+              ),
             ]),
           ),
           actions: [
+            if (isEdit)
+              TextButton(
+                onPressed: () {
+                  _addLog('Expense Deleted: ${exp.title}', '₹${exp.amount} (${exp.category})', 'info');
+                  _expenses.removeWhere((x) => x.id == exp.id);
+                  _saveData();
+                  Navigator.pop(context);
+                  _msg('Expense deleted!');
+                },
+                child: const Text('Delete', style: TextStyle(color: Colors.red)),
+              ),
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
             FilledButton(
               onPressed: () {
                 final amt = int.tryParse(amtC.text.trim()) ?? 0;
                 if (amt <= 0) return;
-                final now = DateTime.now();
                 final title = titleC.text.trim().isEmpty ? cat : titleC.text.trim();
+                final dateStr = dateC.text.trim().isEmpty ? '${now.day}/${now.month}/${now.year}' : dateC.text.trim();
                 final item = ExpenseItem(
                   id: isEdit ? exp.id : now.millisecondsSinceEpoch.toString(),
                   title: title,
                   category: cat,
                   amount: amt,
-                  date: isEdit ? exp.date : '${now.day}/${now.month}/${now.year}',
+                  date: dateStr,
                   monthKey: isEdit ? exp.monthKey : _mKey,
                 );
                 if (isEdit) {
-                  _expenses[_expenses.indexWhere((x) => x.id == exp.id)] = item;
-                  _addLog('Expense Edited: $title', 'Amount: -₹$amt ($cat)', 'expense');
+                  final idx = _expenses.indexWhere((x) => x.id == exp.id);
+                  if (idx != -1) _expenses[idx] = item;
+                  _addLog('Expense Edited: $title', 'Updated to ₹$amt (was ₹${exp.amount}) • $cat', 'expense');
+                  _msg('Expense updated!');
                 } else {
                   _expenses.add(item);
                   _addLog('Expense Added: $title', 'Amount: -₹$amt ($cat • $_mName)', 'expense');
@@ -408,7 +454,7 @@ class _PropertyHomeState extends State<PropertyHome> {
                 _saveData();
                 Navigator.pop(context);
               },
-              child: const Text('Save'),
+              child: Text(isEdit ? 'Update' : 'Save'),
             ),
           ],
         ),
@@ -687,9 +733,16 @@ class _PropertyHomeState extends State<PropertyHome> {
     );
   }
 
+  // Enhanced Detailed Report with Occupancy, Overdue Defaulters, Deposits & Category-wise Expenses
   void _showReportDialog() {
-    int col = 0, due = 0, upcoming = 0;
-    final sb = StringBuffer('=== PROPERTY REPORT ($_mName) ===\n');
+    int col = 0, due = 0, upcoming = 0, depHeld = 0, depPending = 0;
+    final int totalBeds = _rooms.fold(0, (s, r) => s + r.totalBeds);
+    final int occBeds = _tenants.length;
+    final int vacBeds = (totalBeds - occBeds).clamp(0, totalBeds);
+
+    final List<String> overdueList = [];
+    final sb = StringBuffer();
+
     for (final r in _rooms) {
       sb.writeln('\n[${r.name} - ${r.floor}]');
       final rTenants = _tenants.where((t) => t.roomId == r.id).toList();
@@ -698,8 +751,11 @@ class _PropertyHomeState extends State<PropertyHome> {
         final p = _paid(t.id), b = (t.monthlyRent - p).clamp(0, t.monthlyRent);
         final od = _isOverdue(t);
         col += p;
+        depHeld += t.depositPaid;
+        depPending += (t.depositAmount - t.depositPaid).clamp(0, t.depositAmount);
         if (od) {
           due += b;
+          overdueList.add('  ! ${t.name} (${r.name}) - Overdue: ₹$b (Due ${t.dueDay}th)');
         } else {
           upcoming += b;
         }
@@ -710,26 +766,42 @@ class _PropertyHomeState extends State<PropertyHome> {
 
     final mExpenses = _expenses.where((e) => e.monthKey == _mKey).toList();
     final totalExp = mExpenses.fold(0, (s, e) => s + e.amount);
-    sb.writeln('\n=== EXPENSES ($_mName) ===');
-    if (mExpenses.isEmpty) {
-      sb.writeln('  No expenses recorded.');
-    } else {
-      for (final e in mExpenses) {
-        sb.writeln('  • ${e.title} (${e.category}) - ₹${e.amount} [${e.date}]');
-      }
-    }
-
-    if (_logs.isNotEmpty) {
-      sb.writeln('\n=== RECENT ACTIVITY LOGS ===');
-      for (final l in _logs.take(15)) {
-        sb.writeln('  • [${l.time}] ${l.title} - ${l.subtitle}');
-      }
+    final Map<String, int> catTotals = {};
+    for (final e in mExpenses) {
+      catTotals[e.category] = (catTotals[e.category] ?? 0) + e.amount;
     }
 
     final net = col - totalExp;
-    final header =
-        'Rent Collected: ₹$col | Expenses: ₹$totalExp\nNet Profit/Balance: ₹$net\nOverdue Rent: ₹$due | Upcoming: ₹$upcoming\n-----------------------------------------';
-    final text = '$header\n$sb';
+    final out = StringBuffer();
+    out.writeln('=== EASYRENT REPORT ($_mName) ===');
+    out.writeln('Occupancy: $occBeds/$totalBeds Beds Occupied ($vacBeds Vacant)');
+    out.writeln('Rent Collected: ₹$col | Expenses: ₹$totalExp');
+    out.writeln('Net Profit / Balance: ₹$net');
+    out.writeln('Overdue Rent: ₹$due | Upcoming: ₹$upcoming');
+    out.writeln('Deposit Held: ₹$depHeld | Deposit Pending: ₹$depPending');
+    out.writeln('-----------------------------------------');
+
+    if (overdueList.isNotEmpty) {
+      out.writeln('\n=== OVERDUE DEFAULTERS (${overdueList.length}) ===');
+      for (final line in overdueList) {
+        out.writeln(line);
+      }
+    }
+
+    out.writeln('\n=== ROOM-WISE BREAKDOWN ===$sb');
+
+    out.writeln('\n=== EXPENSES BY CATEGORY ($_mName) ===');
+    if (mExpenses.isEmpty) {
+      out.writeln('  No expenses recorded.');
+    } else {
+      catTotals.forEach((k, v) => out.writeln('  • $k: ₹$v'));
+      out.writeln('  --- Detailed Expense List ---');
+      for (final e in mExpenses) {
+        out.writeln('  - ${e.title} (${e.category}): ₹${e.amount} [${e.date}]');
+      }
+    }
+
+    final text = out.toString();
 
     showDialog(
       context: context,
@@ -862,7 +934,6 @@ class _PropertyHomeState extends State<PropertyHome> {
             ),
           ),
         ),
-        // 4-Tab Pill Bar: Floors | Rooms | Expenses | History
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
           child: Container(
@@ -929,23 +1000,26 @@ class _PropertyHomeState extends State<PropertyHome> {
                               margin: const EdgeInsets.only(bottom: 10),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: BorderSide(color: Colors.grey.shade200)),
                               child: ListTile(
+                                onTap: () => _showExpenseDialog(exp: e), // Tap anywhere on card to edit
                                 leading: Container(
                                   padding: const EdgeInsets.all(10),
                                   decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(12)),
                                   child: Icon(Icons.receipt_long_outlined, color: Colors.red.shade700),
                                 ),
                                 title: Text(e.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                subtitle: Text('${e.category} • ${e.date}', style: const TextStyle(fontSize: 12)),
+                                subtitle: Text('${e.category} • ${e.date} (Tap to edit)', style: const TextStyle(fontSize: 12)),
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Text('₹${e.amount}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.red.shade700)),
                                     IconButton(
-                                      icon: const Icon(Icons.edit_outlined, size: 18),
+                                      icon: const Icon(Icons.edit_outlined, size: 19, color: Colors.blue),
+                                      tooltip: 'Edit Expense',
                                       onPressed: () => _showExpenseDialog(exp: e),
                                     ),
                                     IconButton(
-                                      icon: const Icon(Icons.delete_outline, size: 18, color: Colors.grey),
+                                      icon: const Icon(Icons.delete_outline, size: 19, color: Colors.grey),
+                                      tooltip: 'Delete Expense',
                                       onPressed: () {
                                         _addLog('Expense Deleted: ${e.title}', '₹${e.amount}', 'info');
                                         _expenses.removeWhere((x) => x.id == e.id);
