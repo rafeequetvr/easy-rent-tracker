@@ -99,22 +99,27 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Create Flutter project structure & add packages
+      - name: Create Flutter project, configure Fingerprint & add packages
         run: |
           mkdir temp_code
           cp -r lib/* temp_code/
           flutter create --org com.rafeeq.easyrent --project-name easyrent_tracker .
           sed -i 's/android:label="easyrent_tracker"/android:label="EasyRent Tracker"/g' android/app/src/main/AndroidManifest.xml
+          sed -i 's/<manifest[^>]*>/&\n    <uses-permission android:name="android.permission.USE_BIOMETRIC"\/>\n    <uses-permission android:name="android.permission.USE_FINGERPRINT"\/>/' android/app/src/main/AndroidManifest.xml
+          MAIN_KT=$(find android/app/src/main -name "MainActivity.kt")
+          if [ -n "$MAIN_KT" ]; then
+            sed -i 's/FlutterActivity/FlutterFragmentActivity/g' "$MAIN_KT"
+          fi
           cp -r temp_code/* lib/
           rm -rf temp_code
-          flutter pub add shared_preferences share_plus
+          flutter pub add shared_preferences share_plus local_auth
 
       - name: Build Release APK with Auto Version
         run: flutter build apk --release --build-number=${{ github.run_number }}
 
       - name: Force Sign APK with Fixed Key
         run: |
-          APKSIGNER=$(find $ANDROID_HOME/build-tools -name "apksigner" | sort -V | tail -n 1)
+          APKSIGNER=$(find$ANDROID_HOME/build-tools -name "apksigner" | sort -V | tail -n 1)
           $APKSIGNER sign --ks /tmp/easyrent.p12 --ks-type PKCS12 --ks-pass pass:android build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload APK to Artifacts
