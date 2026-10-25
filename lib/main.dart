@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 void main() => runApp(const EasyRentApp());
 
@@ -15,23 +16,57 @@ const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 
 
 int _i(dynamic v, int d) => int.tryParse('$v') ?? d;
 String _s(dynamic v, [String d = '']) => v == null ? d : '$v';
-String _key(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}';
-String _iso(DateTime d) => '${_key(d)}-${d.day.toString().padLeft(2, '0')}';
+String _key(DateTime d) => '\( {d.year}- \){d.month.toString().padLeft(2, '0')}';
+String _iso(DateTime d) => '\( {_key(d)}- \){d.day.toString().padLeft(2, '0')}';
 String _fmt(String iso) {
   final p = iso.split('-');
-  return p.length == 3 ? '${p[2]}/${p[1]}/${p[0]}' : iso;
+  return p.length == 3 ? '\( {p[2]}/ \){p[1]}/${p[0]}' : iso;
 }
 
 String _csv(String s) => '"${s.replaceAll('"', '""')}"';
 
-class EasyRentApp extends StatelessWidget {
+class EasyRentApp extends StatefulWidget {
   const EasyRentApp({super.key});
+  @override
+  State<EasyRentApp> createState() => _EasyRentAppState();
+}
+
+class _EasyRentAppState extends State<EasyRentApp> {
+  ThemeMode _themeMode = ThemeMode.system;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTheme();
+  }
+
+  Future<void> _loadTheme() async {
+    final p = await SharedPreferences.getInstance();
+    final dark = p.getBool('dark') ?? false;
+    if (mounted) setState(() => _themeMode = dark ? ThemeMode.dark : ThemeMode.light);
+  }
+
+  void updateTheme(bool isDark) {
+    setState(() => _themeMode = isDark ? ThemeMode.dark : ThemeMode.light);
+  }
+
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'EasyRent Tracker',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(colorSchemeSeed: _blue, useMaterial3: true, scaffoldBackgroundColor: const Color(0xFFF7F8FA)),
-        home: const PropertyHome(),
+        theme: ThemeData(
+          colorSchemeSeed: _blue,
+          useMaterial3: true,
+          brightness: Brightness.light,
+          scaffoldBackgroundColor: const Color(0xFFF7F8FA),
+        ),
+        darkTheme: ThemeData(
+          colorSchemeSeed: _blue,
+          useMaterial3: true,
+          brightness: Brightness.dark,
+        ),
+        themeMode: _themeMode,
+        home: PropertyHome(onThemeChanged: updateTheme),
       );
 }
 
@@ -49,8 +84,8 @@ class RoomModel {
 
 class Tenant {
   String id, roomId, name, phone;
-  String joined; // first month (yyyy-MM) the tenant is active
-  String lastMonth; // last month (yyyy-MM) the tenant is active; '' = still staying
+  String joined;
+  String lastMonth;
   int bedIndex, monthlyRent, dueDay, depositAmount, depositPaid;
   Tenant({
     required this.id, required this.roomId, required this.bedIndex, required this.name, required this.phone,
@@ -62,21 +97,20 @@ class Tenant {
         'id': id, 'roomId': roomId, 'bedIndex': bedIndex, 'name': name, 'phone': phone, 'monthlyRent': monthlyRent,
         'dueDay': dueDay, 'depositAmount': depositAmount, 'depositPaid': depositPaid, 'joined': joined, 'lastMonth': lastMonth,
       };
-  factory Tenant.fromJson(Map<String, dynamic> j) => Tenant(
-      id: _s(j['id']), roomId: _s(j['roomId']), bedIndex: _i(j['bedIndex'], 0), name: _s(j['name']), phone: _s(j['phone']),
+id: _s(j['id']), roomId: _s(j['roomId']), bedIndex: _i(j['bedIndex'], 0), name: _s(j['name']), phone: _s(j['phone']),
       monthlyRent: _i(j['monthlyRent'], 4000), dueDay: _i(j['dueDay'], 5), depositAmount: _i(j['depositAmount'], 0),
       depositPaid: _i(j['depositPaid'], 0), joined: _s(j['joined']), lastMonth: _s(j['lastMonth']));
 }
 
 class ExpenseItem {
-  String id, title, category, date, monthKey; // date is ISO yyyy-MM-dd
+  String id, title, category, date, monthKey;
   int amount;
   ExpenseItem({required this.id, required this.title, required this.category, required this.amount, required this.date, required this.monthKey});
   Map<String, dynamic> toJson() => {'id': id, 'title': title, 'category': category, 'amount': amount, 'date': date, 'monthKey': monthKey};
   factory ExpenseItem.fromJson(Map<String, dynamic> j) {
     var date = _s(j['date']);
-    final p = date.split('/'); // old backups stored d/m/yyyy
-    if (p.length == 3) date = '${p[2]}-${p[1].padLeft(2, '0')}-${p[0].padLeft(2, '0')}';
+    final p = date.split('/');
+    if (p.length == 3) date = '\( {p[2]}- \){p[1].padLeft(2, '0')}-${p[0].padLeft(2, '0')}';
     return ExpenseItem(
         id: _s(j['id']), title: _s(j['title']), category: _s(j['category'], 'Other'), amount: _i(j['amount'], 0), date: date,
         monthKey: _s(j['monthKey'], date.length >= 7 ? date.substring(0, 7) : ''));
@@ -92,23 +126,21 @@ class LogEntry {
       time: _s(j['time']), monthKey: _s(j['monthKey']), tenantId: _s(j['tenantId']));
 }
 
-/// Single source of truth for the dashboard chips AND the report.
 class MonthSummary {
   int expected = 0, collected = 0, overdue = 0, upcoming = 0, expenses = 0, depHeld = 0, depPending = 0;
   final List<Tenant> overdueList = [];
   int get net => collected - expenses;
 }
 
-// ───────────────────────── Screen ─────────────────────────
-
 class PropertyHome extends StatefulWidget {
-  const PropertyHome({super.key});
+  final void Function(bool isDark)? onThemeChanged;
+  const PropertyHome({super.key, this.onThemeChanged});
   @override
   State<PropertyHome> createState() => _PropertyHomeState();
 }
 
-class _PropertyHomeState extends State<PropertyHome> {
-  static const _storageKey = 'easyrent_master_db_v3'; // same key as before → existing data loads automatically
+class _PropertyHomeState extends State<PropertyHome> with WidgetsBindingObserver {
+  static const _storageKey = 'easyrent_master_db_v3';
   final _auth = LocalAuthentication();
   final _pinCtrl = TextEditingController();
 
@@ -116,9 +148,10 @@ class _PropertyHomeState extends State<PropertyHome> {
   List<Tenant> _tenants = [];
   List<ExpenseItem> _expenses = [];
   List<LogEntry> _logs = [];
-  Map<String, Map<String, dynamic>> _payments = {}; // month -> tenantId -> {paid, rent}
+  Map<String, Map<String, dynamic>> _payments = {};
   String _lastBackup = 'Never', _appPin = '1234', _tab = 'rooms';
-  bool _lockEnabled = false, _isLocked = false;
+  bool _lockEnabled = false, _isLocked = false, _darkMode = false;
+  int _pinAttempts = 0;
   DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
   String? _selectedFloor;
   int _seq = 0;
@@ -126,26 +159,35 @@ class _PropertyHomeState extends State<PropertyHome> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pinCtrl.dispose();
     super.dispose();
   }
 
-  // ── helpers ──
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if ((state == AppLifecycleState.paused || state == AppLifecycleState.inactive) &&
+        _lockEnabled && !_isLocked) {
+      setState(() => _isLocked = true);
+    }
+  }
+
   String get _mKey => _key(_month);
   String get _mName => '${_months[_month.month - 1]} ${_month.year}';
-  String _id() => '${DateTime.now().microsecondsSinceEpoch}${_seq++}';
+  String _id() => '\( {DateTime.now().microsecondsSinceEpoch} \){_seq++}';
   void _msg(String t) {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t)));
   }
 
   String _nowStamp() {
     final n = DateTime.now(), h = n.hour % 12 == 0 ? 12 : n.hour % 12;
-    return '${n.day}/${n.month}/${n.year} $h:${n.minute.toString().padLeft(2, '0')} ${n.hour >= 12 ? 'PM' : 'AM'}';
+    return '\( {n.day}/ \){n.month}/${n.year} \( h: \){n.minute.toString().padLeft(2, '0')} ${n.hour >= 12 ? 'PM' : 'AM'}';
   }
 
   void _addLog(String title, String sub, String type, {String tenantId = ''}) {
@@ -154,13 +196,13 @@ class _PropertyHomeState extends State<PropertyHome> {
   }
 
   int _paid(Tenant t, [String? k]) => _i(_payments[k ?? _mKey]?[t.id]?['paid'], 0);
-  int _rent(Tenant t, [String? k]) => _i(_payments[k ?? _mKey]?[t.id]?['rent'], t.monthlyRent); // rent snapshot per month
+  int _rent(Tenant t, [String? k]) => _i(_payments[k ?? _mKey]?[t.id]?['rent'], t.monthlyRent);
 
   void _setPaid(Tenant t, int paid) => _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': paid, 'rent': _rent(t)};
 
   DateTime _due(Tenant t, String k) {
     final y = int.parse(k.substring(0, 4)), m = int.parse(k.substring(5)), last = DateTime(y, m + 1, 0).day;
-    return DateTime(y, m, t.dueDay > last ? last : t.dueDay); // due day 31 in a 30-day month → last day
+    return DateTime(y, m, t.dueDay > last ? last : t.dueDay);
   }
 
   bool _overdue(Tenant t, String k) => _paid(t, k) < _rent(t, k) && !DateTime.now().isBefore(_due(t, k));
@@ -191,21 +233,30 @@ class _PropertyHomeState extends State<PropertyHome> {
     return s;
   }
 
-  // ── lock ──
   Future<void> _biometricUnlock() async {
     try {
       if (!(await _auth.canCheckBiometrics || await _auth.isDeviceSupported())) return;
       final ok = await _auth.authenticate(localizedReason: 'Scan fingerprint to unlock EasyRent Tracker');
-      if (ok && mounted) setState(() => _isLocked = false);
-    } catch (_) {} // PIN is the fallback
+      if (ok && mounted) {
+        _pinAttempts = 0;
+        setState(() => _isLocked = false);
+      }
+    } catch (_) {}
   }
 
   void _tryPin() {
     if (_pinCtrl.text.trim() == _appPin) {
       _pinCtrl.clear();
+      _pinAttempts = 0;
       setState(() => _isLocked = false);
     } else {
-      _msg('Incorrect PIN!');
+      _pinAttempts++;
+      _pinCtrl.clear();
+      if (_pinAttempts >= 5) {
+        _msg('Too many wrong attempts. Wait a moment.');
+      } else {
+        _msg('Incorrect PIN! (${5 - _pinAttempts} left)');
+      }
     }
   }
 
@@ -213,9 +264,9 @@ class _PropertyHomeState extends State<PropertyHome> {
     final p = await SharedPreferences.getInstance();
     await p.setString('pin', _appPin);
     await p.setBool('lock', _lockEnabled);
+    await p.setBool('dark', _darkMode);
   }
 
-  // ── storage (SharedPreferences only; PIN/lock are NOT part of the backup JSON) ──
   Map<String, dynamic> _backupMap() => {
         'app': 'EasyRent_Tracker', 'version': 4, 'lastBackupTime': _lastBackup,
         'rooms': _rooms.map((r) => r.toJson()).toList(), 'tenants': _tenants.map((t) => t.toJson()).toList(),
@@ -235,9 +286,14 @@ class _PropertyHomeState extends State<PropertyHome> {
 
   Future<void> _loadData() async {
     final p = await SharedPreferences.getInstance();
-    final raw = p.getString(_storageKey), legacy = !p.containsKey('pin');
+    _appPin = p.getString('pin') ?? '1234';
+    _lockEnabled = p.getBool('lock') ?? false;
+    _darkMode = p.getBool('dark') ?? false;
+
+    final raw = p.getString(_storageKey);
+    final legacy = !p.containsKey('pin');
     if (raw != null) _importJson(raw, silent: true, save: false, legacyLock: legacy);
-    if (legacy) await _saveLock(); // move PIN/lock out of the data JSON (one-time)
+    if (legacy) await _saveLock();
     if (!mounted) return;
     setState(() => _isLocked = _lockEnabled);
     if (_lockEnabled) _biometricUnlock();
@@ -252,9 +308,8 @@ class _PropertyHomeState extends State<PropertyHome> {
       final expenses = list('expenses', ExpenseItem.fromJson), logs = list('logs', LogEntry.fromJson);
       final pay = <String, Map<String, dynamic>>{};
       (d['payments'] as Map? ?? {}).forEach((m, v) {
-        if (v is Map) pay['$m'] = {for (final e in v.entries) if (e.value is Map) '${e.key}': Map<String, dynamic>.from(e.value as Map)};
+        if (v is Map) pay['\( m'] = {for (final e in v.entries) if (e.value is Map) ' \){e.key}': Map<String, dynamic>.from(e.value as Map)};
       });
-      // old data had no join month → use first month with a payment, else this month
       for (final t in tenants.where((t) => t.joined.isEmpty)) {
         final ks = pay.entries.where((e) => e.value.containsKey(t.id)).map((e) => e.key).toList()..sort();
         t.joined = ks.isEmpty ? _key(DateTime.now()) : ks.first;
@@ -277,7 +332,6 @@ class _PropertyHomeState extends State<PropertyHome> {
     }
   }
 
-  // ── small UI helpers ──
   Widget _tf(TextEditingController c, String label, {bool digits = false, String? prefix}) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: TextField(
@@ -309,8 +363,7 @@ class _PropertyHomeState extends State<PropertyHome> {
           FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Yes')),
         ]),
       ) ?? false;
-
-  // ── dialogs ──
+// ── dialogs ──
   void _showLockDialog() {
     final pinC = TextEditingController(text: _appPin);
     var on = _lockEnabled;
@@ -348,9 +401,9 @@ class _PropertyHomeState extends State<PropertyHome> {
   }
 
   Future<void> _deleteExpense(ExpenseItem e) async {
-    if (!await _confirm('Delete expense?', '${e.title} • ₹${e.amount}')) return;
+    if (!await _confirm('Delete expense?', '\( {e.title} • ₹ \){e.amount}')) return;
     _expenses.removeWhere((x) => x.id == e.id);
-    _addLog('Expense Deleted: ${e.title}', '₹${e.amount} (${e.category})', 'info');
+    _addLog('Expense Deleted: \( {e.title}', '₹ \){e.amount} (${e.category})', 'info');
     _saveData();
   }
 
@@ -358,7 +411,6 @@ class _PropertyHomeState extends State<PropertyHome> {
     const cats = ['Rent', 'Electricity', 'Water', 'Maintenance', 'Wifi', 'Cleaning', 'Salary', 'Other'];
     final titleC = TextEditingController(text: exp?.title ?? ''), amtC = TextEditingController(text: exp == null ? '' : '${exp.amount}');
     final today = DateTime.now();
-    // new expenses default to the month being viewed
     var date = exp != null ? (DateTime.tryParse(exp.date) ?? today) : (_key(today) == _mKey ? today : DateTime(_month.year, _month.month));
     var cat = exp == null ? 'Electricity' : (cats.contains(exp.category) ? exp.category : 'Other');
 
@@ -399,7 +451,7 @@ class _PropertyHomeState extends State<PropertyHome> {
                 if (amt <= 0) { _msg('Enter a valid amount'); return; }
                 final title = titleC.text.trim().isEmpty ? cat : titleC.text.trim();
                 final e = exp ?? ExpenseItem(id: _id(), title: '', category: '', amount: 0, date: '', monthKey: '');
-                e.title = title; e.category = cat; e.amount = amt; e.date = _iso(date); e.monthKey = _key(date); // month follows the date
+                e.title = title; e.category = cat; e.amount = amt; e.date = _iso(date); e.monthKey = _key(date);
                 if (exp == null) _expenses.add(e);
                 _addLog(exp == null ? 'Expense Added: $title' : 'Expense Edited: $title', '₹$amt • $cat • ${_key(date)}', 'expense');
                 _saveData();
@@ -456,7 +508,7 @@ class _PropertyHomeState extends State<PropertyHome> {
               r.name = name; r.floor = floorC.text.trim().isEmpty ? 'Ground Floor' : floorC.text.trim();
               r.totalBeds = beds; r.defaultRent = _i(rentC.text, 4000);
               if (room == null) _rooms.add(r);
-              _addLog(room == null ? 'New Room Created: $name' : 'Room Updated: $name', '${r.floor} • $beds beds', 'info');
+              _addLog(room == null ? 'New Room Created: $name' : 'Room Updated: \( name', ' \){r.floor} • $beds beds', 'info');
               _saveData();
               Navigator.pop(context);
             },
@@ -469,12 +521,12 @@ class _PropertyHomeState extends State<PropertyHome> {
 
   void _showTenantForm(RoomModel room, int bed, Tenant? t) {
     final nameC = TextEditingController(text: t?.name ?? ''), phoneC = TextEditingController(text: t?.phone ?? ''),
-        rentC = TextEditingController(text: '${t?.monthlyRent ?? room.defaultRent}'), dueC = TextEditingController(text: '${t?.dueDay ?? 5}'),
-        depTC = TextEditingController(text: '${t?.depositAmount ?? 5000}'), depPC = TextEditingController(text: '${t?.depositPaid ?? 5000}');
+        rentC = TextEditingController(text: '\( {t?.monthlyRent ?? room.defaultRent}'), dueC = TextEditingController(text: ' \){t?.dueDay ?? 5}'),
+        depTC = TextEditingController(text: '\( {t?.depositAmount ?? 5000}'), depPC = TextEditingController(text: ' \){t?.depositPaid ?? 5000}');
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text(t == null ? 'Assign Bed ${bed + 1} (${room.name})' : 'Edit Tenant'),
+        title: Text(t == null ? 'Assign Bed \( {bed + 1} ( \){room.name})' : 'Edit Tenant'),
         content: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             _tf(nameC, 'Tenant Name'), _tf(phoneC, 'Phone Number', digits: true), _tf(rentC, 'Monthly Rent (₹)', digits: true),
@@ -489,10 +541,10 @@ class _PropertyHomeState extends State<PropertyHome> {
               final n = t ?? Tenant(id: _id(), roomId: room.id, bedIndex: bed, name: '', phone: '', monthlyRent: 0, dueDay: 5, depositAmount: 0, depositPaid: 0, joined: _mKey);
               n.name = nameC.text.trim(); n.phone = phoneC.text.trim(); n.monthlyRent = _i(rentC.text, room.defaultRent);
               n.dueDay = _i(dueC.text, 5).clamp(1, 31); n.depositAmount = _i(depTC.text, 0); n.depositPaid = _i(depPC.text, 0);
-              final snap = _payments[_mKey]?[n.id]; // rent change applies from the month being viewed; older months keep their rent
+              final snap = _payments[_mKey]?[n.id];
               if (t != null && snap is Map) snap['rent'] = n.monthlyRent;
               if (t == null) _tenants.add(n);
-              _addLog(t == null ? 'New Tenant Joined: ${n.name}' : 'Tenant Edited: ${n.name}', t == null ? '${room.name} (Bed ${bed + 1})' : room.name,
+              _addLog(t == null ? 'New Tenant Joined: ${n.name}' : 'Tenant Edited: \( {n.name}', t == null ? ' \){room.name} (Bed ${bed + 1})' : room.name,
                   t == null ? 'deposit' : 'info', tenantId: n.id);
               _saveData();
               Navigator.pop(context);
@@ -515,15 +567,18 @@ class _PropertyHomeState extends State<PropertyHome> {
       context: context,
       builder: (_) => AlertDialog(
         title: Row(children: [
-          Expanded(child: Text('${t.name} (${room.name})', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold))),
+          Expanded(child: Text('\( {t.name} ( \){room.name})', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold))),
           IconButton(icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () { close(); _showTenantForm(room, bed, t); }),
-          IconButton(
+IconButton(
             icon: const Icon(Icons.person_remove_outlined, color: Colors.red, size: 20),
             onPressed: () async {
               if (!await _confirm('Vacate ${t.name}?', 'Stays in $_mName and earlier months, removed from next month. Records are kept.')) return;
-              // joined this month with no payments → added by mistake, remove; otherwise keep history
-              if (t.joined == _mKey && !_payments.values.any((m) => m.containsKey(t.id))) { _tenants.remove(t); } else { t.lastMonth = _mKey; }
-              _addLog('Tenant Vacated: ${t.name}', '${room.name} (Bed ${bed + 1})', 'info', tenantId: t.id);
+              if (t.joined == _mKey && !_payments.values.any((m) => m.containsKey(t.id))) {
+                _tenants.remove(t);
+              } else {
+                t.lastMonth = _mKey;
+              }
+              _addLog('Tenant Vacated: \( {t.name}', ' \){room.name} (Bed ${bed + 1})', 'info', tenantId: t.id);
               _saveData();
               if (mounted) close();
             },
@@ -541,10 +596,38 @@ class _PropertyHomeState extends State<PropertyHome> {
                   Text('Paid ($_mName): ₹$paid • Balance: ₹$bal',
                       style: TextStyle(fontWeight: FontWeight.bold, color: bal == 0 ? _green : (_overdue(t, _mKey) ? _red : _blue))),
                   const Divider(),
-                  Text('Deposit Held: ₹${t.depositPaid} / ₹${t.depositAmount} ${depBal > 0 ? "(Due: ₹$depBal)" : "✓"}',
+                  Text('Deposit Held: ₹\( {t.depositPaid} / ₹ \){t.depositAmount} ${depBal > 0 ? "(Due: ₹$depBal)" : "✓"}',
                       style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.teal)),
                 ]),
               ),
+              if (t.phone.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.call, size: 18),
+                      label: const Text('Call'),
+                      onPressed: () => launchUrl(Uri.parse('tel:${t.phone}')),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.chat, size: 18),
+                      label: const Text('WhatsApp'),
+                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF25D366)),
+                      onPressed: () {
+                        final phone = t.phone.replaceAll(RegExp(r'[^0-9]'), '');
+                        final msg = Uri.encodeComponent('Hello ${t.name}, regarding your rent for $_mName.');
+                        launchUrl(
+                          Uri.parse('https://wa.me/91$phone?text=$msg'),
+                          mode: LaunchMode.externalApplication,
+                        );
+                      },
+                    ),
+                  ),
+                ]),
+              ],
               const SizedBox(height: 12),
               Row(children: [
                 Expanded(child: _tf(rentC, 'Add Rent (₹)', digits: true)),
@@ -553,7 +636,7 @@ class _PropertyHomeState extends State<PropertyHome> {
                   final add = _i(rentC.text, 0);
                   if (add > 0) {
                     _setPaid(t, (paid + add).clamp(0, rent * 2));
-                    _addLog('Rent Received: +₹$add', '${t.name} (${room.name}) • $_mName', 'rent', tenantId: t.id);
+                    _addLog('Rent Received: +₹\( add', ' \){t.name} (${room.name}) • $_mName', 'rent', tenantId: t.id);
                     _saveData();
                   }
                   close();
@@ -561,7 +644,7 @@ class _PropertyHomeState extends State<PropertyHome> {
                 const SizedBox(width: 4),
                 OutlinedButton(onPressed: () {
                   _setPaid(t, rent);
-                  _addLog('Full Rent Paid: ₹$rent', '${t.name} (${room.name}) • $_mName', 'rent', tenantId: t.id);
+                  _addLog('Full Rent Paid: ₹\( rent', ' \){t.name} (${room.name}) • $_mName', 'rent', tenantId: t.id);
                   _saveData();
                   close();
                 }, child: const Text('Full')),
@@ -573,7 +656,7 @@ class _PropertyHomeState extends State<PropertyHome> {
                   final add = _i(depC.text, 0);
                   if (add > 0) {
                     t.depositPaid = (t.depositPaid + add).clamp(0, 999999);
-                    _addLog('Deposit Received: +₹$add', '${t.name} (${room.name})', 'deposit', tenantId: t.id);
+                    _addLog('Deposit Received: +₹\( add', ' \){t.name} (${room.name})', 'deposit', tenantId: t.id);
                     _saveData();
                   }
                   close();
@@ -602,7 +685,7 @@ class _PropertyHomeState extends State<PropertyHome> {
               onPressed: () async {
                 if (!await _confirm('Reset rent?', 'Paid amount for $_mName will become ₹0.')) return;
                 _setPaid(t, 0);
-                _addLog('Rent Reset to ₹0', '${t.name} (${room.name}) • $_mName', 'info', tenantId: t.id);
+                _addLog('Rent Reset to ₹0', '\( {t.name} ( \){room.name}) • $_mName', 'info', tenantId: t.id);
                 _saveData();
                 if (mounted) close();
               },
@@ -614,25 +697,26 @@ class _PropertyHomeState extends State<PropertyHome> {
     );
   }
 
-  // ── report ──
   void _remind(Tenant t) => Share.share(
-      'Hi ${t.name}, your rent of ₹${_rent(t) - _paid(t)} for $_mName was due on ${_fmt(_iso(_due(t, _mKey)))}. Please pay at the earliest. Thank you.');
+      'Hi \( {t.name}, your rent of ₹ \){_rent(t) - _paid(t)} for $_mName was due on ${_fmt(_iso(_due(t, _mKey)))}. Please pay at the earliest. Thank you.');
 
   String _reportText() {
     final s = _summary(), act = _tenants.where((t) => t.activeIn(_mKey)).toList();
     final beds = _rooms.fold(0, (a, r) => a + r.totalBeds), maxRent = _rooms.fold(0, (a, r) => a + r.totalBeds * r.defaultRent);
     final b = StringBuffer()
       ..writeln('=== EASYRENT REPORT ($_mName) ===')
-      ..writeln('Occupancy: ${act.length}/$beds beds (${(beds - act.length).clamp(0, beds)} vacant)')
+      ..writeln('Occupancy: ${act.length}/\( beds beds ( \){(beds - act.length).clamp(0, beds)} vacant)')
       ..writeln('Expected: ₹${s.expected} | Max potential: ₹$maxRent')
       ..writeln('Collected: ₹${s.collected}')
-      ..writeln('Pending: ₹${s.overdue + s.upcoming} (Overdue ₹${s.overdue} | Not yet due ₹${s.upcoming})')
-      ..writeln('Expenses: ₹${s.expenses} | Net Profit: ₹${s.net}')
-      ..writeln('Deposits held: ₹${s.depHeld} | Deposit pending: ₹${s.depPending}');
+      ..writeln('Pending: ₹\( {s.overdue + s.upcoming} (Overdue ₹ \){s.overdue} | Not yet due ₹${s.upcoming})')
+      ..writeln('Expenses: ₹\( {s.expenses} | Net Profit: ₹ \){s.net}')
+      ..writeln('Deposits held: ₹\( {s.depHeld} | Deposit pending: ₹ \){s.depPending}');
 
     if (s.overdueList.isNotEmpty) {
       b.writeln('\n=== OVERDUE ===');
-      for (final t in s.overdueList) { b.writeln(' ! ${t.name} (${_roomName(t.roomId)}): ₹${_rent(t) - _paid(t)} • ${_lateText(t)}'); }
+      for (final t in s.overdueList) {
+        b.writeln(' ! \( {t.name} ( \){_roomName(t.roomId)}): ₹${_rent(t) - _paid(t)} • ${_lateText(t)}');
+      }
     }
 
     b.writeln('\n=== BY ROOM ===');
@@ -640,24 +724,28 @@ class _PropertyHomeState extends State<PropertyHome> {
       b.writeln('[${r.name} - ${r.floor}]');
       final rt = act.where((t) => t.roomId == r.id).toList();
       if (rt.isEmpty) b.writeln(' All beds vacant');
-      for (final t in rt) { b.writeln(' • ${t.name}: Rent ₹${_rent(t)} | Paid ₹${_paid(t)} | Dep ₹${t.depositPaid}/₹${t.depositAmount}'); }
+      for (final t in rt) {
+        b.writeln(' • \( {t.name}: Rent ₹ \){_rent(t)} | Paid ₹\( {_paid(t)} | Dep ₹ \){t.depositPaid}/₹${t.depositAmount}');
+      }
     }
 
     b.writeln('\n=== EXPENSES BY CATEGORY ===');
     final cat = <String, int>{};
-    for (final e in _expenses.where((e) => e.monthKey == _mKey)) { cat[e.category] = (cat[e.category] ?? 0) + e.amount; }
+    for (final e in _expenses.where((e) => e.monthKey == _mKey)) {
+      cat[e.category] = (cat[e.category] ?? 0) + e.amount;
+    }
     if (cat.isEmpty) b.writeln(' No expenses recorded.');
     cat.forEach((k, v) => b.writeln(' • $k: ₹$v'));
 
     b.writeln('\n=== ${_month.year} (Collected - Expenses = Net) ===');
     var yc = 0, ye = 0;
     for (var m = 1; m <= 12; m++) {
-      final y = _summary('${_month.year}-${m.toString().padLeft(2, '0')}');
+      final y = _summary('\( {_month.year}- \){m.toString().padLeft(2, '0')}');
       yc += y.collected;
       ye += y.expenses;
-      if (y.collected + y.expenses > 0) b.writeln(' ${_months[m - 1]}: ₹${y.collected} - ₹${y.expenses} = ₹${y.net}');
+      if (y.collected + y.expenses > 0) b.writeln(' \( {_months[m - 1]}: ₹ \){y.collected} - ₹\( {y.expenses} = ₹ \){y.net}');
     }
-    b.writeln(' Total: ₹$yc - ₹$ye = ₹${yc - ye}');
+    b.writeln(' Total: ₹$yc - ₹\( ye = ₹ \){yc - ye}');
     return b.toString();
   }
 
@@ -665,7 +753,7 @@ class _PropertyHomeState extends State<PropertyHome> {
     final rows = ['Room,Bed,Tenant,Phone,Rent,Paid,Balance,Status'];
     for (final t in _tenants.where((t) => t.activeIn(_mKey))) {
       final r = _rent(t), p = _paid(t), status = p >= r ? 'Paid' : (_overdue(t, _mKey) ? 'Overdue' : 'Pending');
-      rows.add('${_csv(_roomName(t.roomId))},${t.bedIndex + 1},${_csv(t.name)},${_csv(t.phone)},$r,$p,${(r - p).clamp(0, r)},$status');
+      rows.add('\( {_csv(_roomName(t.roomId))}, \){t.bedIndex + 1},\( {_csv(t.name)}, \){_csv(t.phone)},$r,\( p, \){(r - p).clamp(0, r)},$status');
     }
     try {
       final f = File('${Directory.systemTemp.path}/EasyRent_$_mKey.csv')..writeAsStringSync(rows.join('\n'), flush: true);
@@ -689,10 +777,10 @@ class _PropertyHomeState extends State<PropertyHome> {
               if (od.isNotEmpty) ...[
                 const Divider(height: 24),
                 const Text('Send rent reminder', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                for (final t in od)
+for (final t in od)
                   ListTile(
                     dense: true, contentPadding: EdgeInsets.zero,
-                    title: Text('${t.name} • ₹${_rent(t) - _paid(t)}'), subtitle: Text(_lateText(t)),
+                    title: Text('\( {t.name} • ₹ \){_rent(t) - _paid(t)}'), subtitle: Text(_lateText(t)),
                     trailing: IconButton(icon: const Icon(Icons.send, color: _green), onPressed: () => _remind(t)),
                   ),
               ],
@@ -770,7 +858,6 @@ class _PropertyHomeState extends State<PropertyHome> {
     );
   }
 
-  // ── list items ──
   Widget _floorCard(String fl) {
     final fr = _rooms.where((r) => r.floor == fl).toList(), ids = fr.map((r) => r.id).toSet();
     final occ = _tenants.where((t) => t.activeIn(_mKey) && ids.contains(t.roomId)).length, beds = fr.fold(0, (a, r) => a + r.totalBeds);
@@ -805,7 +892,7 @@ class _PropertyHomeState extends State<PropertyHome> {
         dense: true, isThreeLine: true,
         leading: _iconBox(ic, c.shade700, c.shade50, pad: 8, size: 20),
         title: Text(l.title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: c.shade700)),
-        subtitle: Text('${l.subtitle}\n${l.time}', style: const TextStyle(fontSize: 11, height: 1.3)),
+        subtitle: Text('\( {l.subtitle}\n \){l.time}', style: const TextStyle(fontSize: 11, height: 1.3)),
       ),
       mb: 8,
     );
@@ -831,7 +918,7 @@ class _PropertyHomeState extends State<PropertyHome> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(room.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
                 const SizedBox(height: 2),
-                Text('$occ/${room.totalBeds} beds full • Rent: ₹${room.defaultRent}\nPer bed', style: TextStyle(color: Colors.grey.shade600, fontSize: 13, height: 1.2)),
+                Text('\( occ/ \){room.totalBeds} beds full • Rent: ₹${room.defaultRent}\nPer bed', style: TextStyle(color: Colors.grey.shade600, fontSize: 13, height: 1.2)),
               ]),
             ),
             Container(
@@ -884,7 +971,6 @@ class _PropertyHomeState extends State<PropertyHome> {
     );
   }
 
-  // ── screens ──
   Widget _chip(String label, int v, Color c) => Expanded(
         child: Column(children: [
           Text(label, style: TextStyle(fontSize: 10, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
@@ -963,6 +1049,15 @@ class _PropertyHomeState extends State<PropertyHome> {
         title: const Text('Property Management', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 17)),
         backgroundColor: Colors.white, surfaceTintColor: Colors.white,
         actions: [
+          IconButton(
+            tooltip: _darkMode ? 'Light mode' : 'Dark mode',
+            onPressed: () {
+              setState(() => _darkMode = !_darkMode);
+              _saveLock();
+              widget.onThemeChanged?.call(_darkMode);
+            },
+            icon: Icon(_darkMode ? Icons.light_mode : Icons.dark_mode_outlined),
+          ),
           IconButton(onPressed: _showLockDialog, icon: Icon(_lockEnabled ? Icons.lock_outline : Icons.lock_open_outlined, color: _lockEnabled ? Colors.blue.shade800 : null)),
           IconButton(onPressed: _showReportDialog, icon: const Icon(Icons.assessment_outlined), tooltip: 'Report'),
           IconButton(onPressed: _showBackupDialog, icon: const Icon(Icons.cloud_sync_outlined), tooltip: 'Backup'),
