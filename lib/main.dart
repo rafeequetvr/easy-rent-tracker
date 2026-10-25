@@ -169,6 +169,7 @@ class _PropertyHomeState extends State<PropertyHome> {
   List<ExpenseItem> _expenses = [];
   List<LogEntry> _logs = [];
   Map<String, Map<String, dynamic>> _payments = {};
+  String _lastBackupTime = 'Never';
   DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
   String _tab = 'rooms'; // 'floors', 'rooms', 'expenses', 'history'
   String? _selectedFloor;
@@ -276,15 +277,19 @@ class _PropertyHomeState extends State<PropertyHome> {
     _saveData();
   }
 
+  Map<String, dynamic> _buildBackupMap() => {
+        'app': 'EasyRent_Tracker',
+        'version': 2,
+        'lastBackupTime': _lastBackupTime,
+        'rooms': _rooms.map((r) => r.toJson()).toList(),
+        'tenants': _tenants.map((t) => t.toJson()).toList(),
+        'expenses': _expenses.map((e) => e.toJson()).toList(),
+        'logs': _logs.map((l) => l.toJson()).toList(),
+        'payments': _payments,
+      };
+
   void _saveData() {
-    final data = {
-      'rooms': _rooms.map((r) => r.toJson()).toList(),
-      'tenants': _tenants.map((t) => t.toJson()).toList(),
-      'expenses': _expenses.map((e) => e.toJson()).toList(),
-      'logs': _logs.map((l) => l.toJson()).toList(),
-      'payments': _payments,
-    };
-    final jsonStr = jsonEncode(data);
+    final jsonStr = jsonEncode(_buildBackupMap());
 
     for (final f in _getStorageFiles()) {
       try {
@@ -344,12 +349,18 @@ class _PropertyHomeState extends State<PropertyHome> {
       _expenses = loadedExpenses;
       _logs = loadedLogs;
       _payments = loadedPayments;
+      if (d['lastBackupTime'] != null) {
+        _lastBackupTime = '${d['lastBackupTime']}';
+      }
 
-      if (saveAfter) _saveData();
+      if (saveAfter) {
+        _addLog('Backup Restored', '${_rooms.length} Rooms, ${_tenants.length} Tenants restored', 'info');
+        _saveData();
+      }
       if (!silent) _msg('Backup Restored Successfully!');
       return true;
     } catch (_) {
-      if (!silent) _msg('Invalid Backup Data!');
+      if (!silent) _msg('Invalid Backup Code! Please check and try again.');
       return false;
     }
   }
@@ -732,9 +743,11 @@ class _PropertyHomeState extends State<PropertyHome> {
     );
   }
 
+  // Enhanced Detailed Report with Total Expected Income & Max Potential Income
   void _showReportDialog() {
-    int col = 0, due = 0, upcoming = 0, depHeld = 0, depPending = 0;
+    int expectedRent = 0, col = 0, due = 0, upcoming = 0, depHeld = 0, depPending = 0;
     final int totalBeds = _rooms.fold(0, (s, r) => s + r.totalBeds);
+    final int maxPotentialRent = _rooms.fold(0, (s, r) => s + (r.totalBeds * r.defaultRent));
     final int occBeds = _tenants.length;
     final int vacBeds = (totalBeds - occBeds).clamp(0, totalBeds);
 
@@ -748,6 +761,7 @@ class _PropertyHomeState extends State<PropertyHome> {
       for (final t in rTenants) {
         final p = _paid(t.id), b = (t.monthlyRent - p).clamp(0, t.monthlyRent);
         final od = _isOverdue(t);
+        expectedRent += t.monthlyRent;
         col += p;
         depHeld += t.depositPaid;
         depPending += (t.depositAmount - t.depositPaid).clamp(0, t.depositAmount);
@@ -758,7 +772,7 @@ class _PropertyHomeState extends State<PropertyHome> {
           upcoming += b;
         }
         final status = b == 0 ? 'PAID' : (od ? 'OVERDUE (₹$b)' : 'UPCOMING (₹$b, Due ${t.dueDay}th)');
-        sb.writeln('  • ${t.name}: Paid ₹$p | $status | Dep: ₹${t.depositPaid}/₹${t.depositAmount}');
+        sb.writeln('  • ${t.name}: Rent ₹${t.monthlyRent} | Paid ₹$p | $status | Dep: ₹${t.depositPaid}/₹${t.depositAmount}');
       }
     }
 
@@ -773,6 +787,8 @@ class _PropertyHomeState extends State<PropertyHome> {
     final out = StringBuffer();
     out.writeln('=== EASYRENT REPORT ($_mName) ===');
     out.writeln('Occupancy: $occBeds/$totalBeds Beds Occupied ($vacBeds Vacant)');
+    out.writeln('Total Expected Income (Active Tenants): ₹$expectedRent');
+    out.writeln('Max Potential Income (If 100% Full): ₹$maxPotentialRent');
     out.writeln('Rent Collected: ₹$col | Expenses: ₹$totalExp');
     out.writeln('Net Profit / Balance: ₹$net');
     out.writeln('Overdue Rent: ₹$due | Upcoming: ₹$upcoming');
@@ -821,43 +837,131 @@ class _PropertyHomeState extends State<PropertyHome> {
     );
   }
 
+  // Improved Backup & Restore Center (File Export, Summary, Clipboard Paste & Validation)
   void _showBackupDialog() {
-    final jsonStr = jsonEncode({
-      'rooms': _rooms.map((r) => r.toJson()).toList(),
-      'tenants': _tenants.map((t) => t.toJson()).toList(),
-      'expenses': _expenses.map((e) => e.toJson()).toList(),
-      'logs': _logs.map((l) => l.toJson()).toList(),
-      'payments': _payments,
-    });
     final ctrl = TextEditingController();
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Backup & Restore'),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            FilledButton.icon(onPressed: () => Share.share(jsonStr), icon: const Icon(Icons.share), label: const Text('Share / Save Backup')),
-            const SizedBox(height: 6),
-            OutlinedButton.icon(
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: jsonStr));
-                  _msg('Backup Copied!');
-                },
-                icon: const Icon(Icons.copy),
-                label: const Text('Copy Backup Code')),
-            const Divider(height: 24),
-            TextField(controller: ctrl, maxLines: 3, decoration: const InputDecoration(labelText: 'Paste Backup Code to Restore', border: OutlineInputBorder())),
-            const SizedBox(height: 8),
-            FilledButton.tonal(
-                onPressed: () {
-                  if (ctrl.text.trim().isNotEmpty) {
-                    _importJson(ctrl.text.trim());
-                    Navigator.pop(context);
-                  }
-                },
-                child: const Text('Restore Now')),
-          ]),
-        ),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setSt) {
+          return AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.cloud_sync_outlined, color: Color(0xFF2563EB)),
+                SizedBox(width: 8),
+                Text('Backup & Restore', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blue.shade100),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Current Database Summary:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                          const SizedBox(height: 4),
+                          Text('• Rooms: ${_rooms.length} | Active Tenants: ${_tenants.length}', style: const TextStyle(fontSize: 12)),
+                          Text('• Expenses: ${_expenses.length} | Activity Logs: ${_logs.length}', style: const TextStyle(fontSize: 12)),
+                          const SizedBox(height: 4),
+                          Text('Last Backup: $_lastBackupTime', style: TextStyle(fontSize: 11, color: Colors.blue.shade900, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: () async {
+                        _lastBackupTime = _nowStamp();
+                        _saveData();
+                        setSt(() {});
+                        final jsonStr = jsonEncode(_buildBackupMap());
+                        try {
+                          final f = File('${Directory.systemTemp.path}/EasyRent_Backup.json');
+                          f.writeAsStringSync(jsonStr, flush: true);
+                          await Share.shareXFiles([XFile(f.path)], text: 'EasyRent Backup ($_lastBackupTime)');
+                        } catch (_) {
+                          Share.share(jsonStr, subject: 'EasyRent_Backup.json');
+                        }
+                      },
+                      icon: const Icon(Icons.upload_file),
+                      label: const Text('Export Backup File (.json)'),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        _lastBackupTime = _nowStamp();
+                        _saveData();
+                        setSt(() {});
+                        final jsonStr = jsonEncode(_buildBackupMap());
+                        Clipboard.setData(ClipboardData(text: jsonStr));
+                        _msg('Backup code copied to clipboard!');
+                      },
+                      icon: const Icon(Icons.copy, size: 18),
+                      label: const Text('Copy Backup Code as Text'),
+                    ),
+                    const Divider(height: 26),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Restore from Backup:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                        TextButton.icon(
+                          onPressed: () async {
+                            final data = await Clipboard.getData('text/plain');
+                            if (data?.text != null && data!.text!.trim().isNotEmpty) {
+                              setSt(() => ctrl.text = data.text!.trim());
+                              _msg('Pasted from clipboard!');
+                            } else {
+                              _msg('Clipboard is empty!');
+                            }
+                          },
+                          icon: const Icon(Icons.content_paste, size: 16),
+                          label: const Text('Paste Clipboard', style: TextStyle(fontSize: 12)),
+                        ),
+                      ],
+                    ),
+                    TextField(
+                      controller: ctrl,
+                      maxLines: 3,
+                      style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                      decoration: const InputDecoration(
+                        hintText: 'Paste backup JSON code here...',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    FilledButton.tonalIcon(
+                      onPressed: () {
+                        if (ctrl.text.trim().isEmpty) {
+                          _msg('Please paste backup code first!');
+                          return;
+                        }
+                        if (_importJson(ctrl.text.trim())) {
+                          Navigator.pop(context);
+                        }
+                      },
+                      icon: const Icon(Icons.settings_backup_restore),
+                      label: const Text('Restore Data Now'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+            ],
+          );
+        },
       ),
     );
   }
@@ -885,14 +989,28 @@ class _PropertyHomeState extends State<PropertyHome> {
     );
   }
 
+  Widget _summaryChip(String label, String value, Color color) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(label, style: TextStyle(fontSize: 10, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
+          const SizedBox(height: 2),
+          Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final floors = _rooms.map((r) => r.floor).toSet().toList();
     final visibleRooms = _selectedFloor == null ? _rooms : _rooms.where((r) => r.floor == _selectedFloor).toList();
     final mExpenses = _expenses.where((e) => e.monthKey == _mKey).toList();
 
+    int totalExpected = 0;
     int totalCol = 0;
     for (final t in _tenants) {
+      totalExpected += t.monthlyRent;
       totalCol += _paid(t.id);
     }
     final int totalExp = mExpenses.fold(0, (s, e) => s + e.amount);
@@ -912,22 +1030,25 @@ class _PropertyHomeState extends State<PropertyHome> {
         ],
       ),
       body: Column(children: [
+        // Top Financial Bar including Total Expected Income
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: Colors.grey.shade200),
             ),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Collected: ₹$totalCol', style: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold, fontSize: 12)),
-                Text('Expenses: ₹$totalExp', style: const TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.bold, fontSize: 12)),
-                Text('Net: ₹$netProfit',
-                    style: TextStyle(color: netProfit >= 0 ? const Color(0xFF1E3A8A) : Colors.red, fontWeight: FontWeight.bold, fontSize: 12)),
+                _summaryChip('Expected', '₹$totalExpected', const Color(0xFF2563EB)),
+                Container(width: 1, height: 24, color: Colors.grey.shade200),
+                _summaryChip('Collected', '₹$totalCol', const Color(0xFF15803D)),
+                Container(width: 1, height: 24, color: Colors.grey.shade200),
+                _summaryChip('Expenses', '₹$totalExp', const Color(0xFFDC2626)),
+                Container(width: 1, height: 24, color: Colors.grey.shade200),
+                _summaryChip('Net Profit', '₹$netProfit', netProfit >= 0 ? const Color(0xFF1E3A8A) : Colors.red),
               ],
             ),
           ),
