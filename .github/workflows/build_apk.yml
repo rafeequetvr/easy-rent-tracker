@@ -21,8 +21,8 @@ jobs:
 
       - name: Fix Android SDK Permissions & Accept Licenses
         run: |
-          sudo chmod -R 777 $ANDROID_HOME
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          sudo chmod -R 777 "$ANDROID_HOME"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
       - name: Generate 100% Identical Permanent Signing Key
         run: |
@@ -116,11 +116,6 @@ jobs:
 
       - name: Build Release APK with Auto Version
         run: flutter build apk --release --build-number=${{ github.run_number }}
-
-      - name: Force Sign APK with Fixed Key
-        run: |
-          APKSIGNER=$(find$ANDROID_HOME/build-tools -name "apksigner" | sort -V | tail -n 1)
-          $APKSIGNER sign --ks /tmp/easyrent.p12 --ks-type PKCS12 --ks-pass pass:android build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v4
