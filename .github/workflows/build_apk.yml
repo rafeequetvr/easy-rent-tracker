@@ -90,9 +90,9 @@ jobs:
           with open("/tmp/easyrent.p12", "wb") as f:
               f.write(p12)
           EOF
-          mkdir -p ~/.android
-          rm -f ~/.android/debug.keystore
-          keytool -importkeystore -srckeystore /tmp/easyrent.p12 -srcstoretype PKCS12 -srcstorepass android -destkeystore ~/.android/debug.keystore -deststoretype JKS -deststorepass android -noprompt
+          mkdir -p \~/.android
+          rm -f \~/.android/debug.keystore
+          keytool -importkeystore -srckeystore /tmp/easyrent.p12 -srcstoretype PKCS12 -srcstorepass android -destkeystore \~/.android/debug.keystore -deststoretype JKS -deststorepass android -noprompt
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -112,7 +112,7 @@ jobs:
           fi
           cp -r temp_code/* lib/
           rm -rf temp_code
-          flutter pub add shared_preferences share_plus local_auth
+          flutter pub add shared_preferences share_plus local_auth url_launcher
 
       - name: Build Release APK with Auto Version
         run: flutter build apk --release --build-number=${{ github.run_number }}
