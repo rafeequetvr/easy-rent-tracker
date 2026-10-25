@@ -70,12 +70,12 @@ class ExpenseItem {
 }
 
 class LogEntry {
-  String id, title, subtitle, type, time, tenantId;
-  LogEntry({required this.id, required this.title, required this.subtitle, required this.type, required this.time, this.tenantId = ''});
-  Map<String, dynamic> toJson() => {'id': id, 'title': title, 'subtitle': subtitle, 'type': type, 'time': time, 'tenantId': tenantId};
+  String id, title, subtitle, type, time, monthKey, tenantId;
+  LogEntry({required this.id, required this.title, required this.subtitle, required this.type, required this.time, required this.monthKey, this.tenantId = ''});
+  Map<String, dynamic> toJson() => {'id': id, 'title': title, 'subtitle': subtitle, 'type': type, 'time': time, 'monthKey': monthKey, 'tenantId': tenantId};
   factory LogEntry.fromJson(Map<String, dynamic> j) => LogEntry(
         id: '${j['id'] ?? ''}', title: '${j['title'] ?? ''}', subtitle: '${j['subtitle'] ?? ''}',
-        type: '${j['type'] ?? 'info'}', time: '${j['time'] ?? ''}', tenantId: '${j['tenantId'] ?? ''}',
+        type: '${j['type'] ?? 'info'}', time: '${j['time'] ?? ''}', monthKey: '${j['monthKey'] ?? ''}', tenantId: '${j['tenantId'] ?? ''}',
       );
 }
 
@@ -86,7 +86,7 @@ class PropertyHome extends StatefulWidget {
 }
 
 class _PropertyHomeState extends State<PropertyHome> {
-  static const _storageKey = 'easyrent_master_db_v2';
+  static const _storageKey = 'easyrent_master_db_v3';
   final LocalAuthentication _auth = LocalAuthentication();
 
   List<RoomModel> _rooms = [];
@@ -123,7 +123,11 @@ class _PropertyHomeState extends State<PropertyHome> {
   }
 
   void _addLog(String title, String subtitle, String type, {String tenantId = ''}) {
-    _logs.insert(0, LogEntry(id: DateTime.now().millisecondsSinceEpoch.toString(), title: title, subtitle: subtitle, type: type, time: _nowStamp(), tenantId: tenantId));
+    _logs.insert(0, LogEntry(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      title: title, subtitle: subtitle, type: type, time: _nowStamp(),
+      monthKey: _mKey, tenantId: tenantId,
+    ));
   }
 
   bool _isOverdue(Tenant t) {
@@ -140,9 +144,7 @@ class _PropertyHomeState extends State<PropertyHome> {
       final canCheck = await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
       if (!canCheck) return;
       final didAuth = await _auth.authenticate(localizedReason: 'Scan fingerprint to unlock EasyRent Tracker');
-      if (didAuth && mounted) {
-        setState(() => _isLocked = false);
-      }
+      if (didAuth && mounted) setState(() => _isLocked = false);
     } catch (_) {}
   }
 
@@ -153,11 +155,11 @@ class _PropertyHomeState extends State<PropertyHome> {
       String base = tmp.contains('/cache') ? tmp.split('/cache').first : (tmp.contains('/code_cache') ? tmp.split('/code_cache').first : Directory.systemTemp.parent.path);
       final dir = Directory('$base/files');
       if (!dir.existsSync()) dir.createSync(recursive: true);
-      list.add(File('${dir.path}/easyrent_data_v2.json'));
-      list.add(File('$base/easyrent_data_v2.json'));
+      list.add(File('${dir.path}/easyrent_data_v3.json'));
+      list.add(File('$base/easyrent_data_v3.json'));
     } catch (_) {}
     try {
-      list.add(File('${Directory.systemTemp.path}/easyrent_data_v2.json'));
+      list.add(File('${Directory.systemTemp.path}/easyrent_data_v3.json'));
     } catch (_) {}
     return list;
   }
@@ -196,8 +198,6 @@ class _PropertyHomeState extends State<PropertyHome> {
       _tenants = [
         Tenant(id: 't1', roomId: 'r1', bedIndex: 0, name: 'Uvais', phone: '', monthlyRent: 4000, dueDay: 5, depositAmount: 5000, depositPaid: 5000),
         Tenant(id: 't2', roomId: 'r1', bedIndex: 1, name: 'Rasal', phone: '', monthlyRent: 4000, dueDay: 5, depositAmount: 5000, depositPaid: 5000),
-        Tenant(id: 't3', roomId: 'r1', bedIndex: 2, name: 'Nishan', phone: '', monthlyRent: 2000, dueDay: 10, depositAmount: 5000, depositPaid: 5000),
-        Tenant(id: 't4', roomId: 'r1', bedIndex: 3, name: 'Munavir', phone: '', monthlyRent: 2000, dueDay: 25, depositAmount: 5000, depositPaid: 5000),
       ];
       _saveData();
     }
@@ -212,7 +212,7 @@ class _PropertyHomeState extends State<PropertyHome> {
 
   Map<String, dynamic> _buildBackupMap() => {
         'app': 'EasyRent_Tracker',
-        'version': 2,
+        'version': 3,
         'lastBackupTime': _lastBackupTime,
         'lockEnabled': _lockEnabled,
         'appPin': _appPin,
@@ -226,9 +226,7 @@ class _PropertyHomeState extends State<PropertyHome> {
   void _saveData() {
     final jsonStr = jsonEncode(_buildBackupMap());
     for (final f in _getStorageFiles()) {
-      try {
-        f.writeAsStringSync(jsonStr, flush: true);
-      } catch (_) {}
+      try { f.writeAsStringSync(jsonStr, flush: true); } catch (_) {}
     }
     SharedPreferences.getInstance().then((prefs) => prefs.setString(_storageKey, jsonStr)).catchError((_) {});
     if (mounted) setState(() {});
@@ -250,9 +248,7 @@ class _PropertyHomeState extends State<PropertyHome> {
         (d['payments'] as Map).forEach((mKey, mVal) {
           if (mVal is Map) {
             final Map<String, dynamic> inner = {};
-            mVal.forEach((tId, tVal) {
-              if (tVal is Map) inner[tId.toString()] = Map<String, dynamic>.from(tVal);
-            });
+            mVal.forEach((tId, tVal) { if (tVal is Map) inner[tId.toString()] = Map<String, dynamic>.from(tVal); });
             loadedPayments[mKey.toString()] = inner;
           }
         });
@@ -263,7 +259,7 @@ class _PropertyHomeState extends State<PropertyHome> {
       if (d['appPin'] != null && '${d['appPin']}'.isNotEmpty) _appPin = '${d['appPin']}';
 
       if (saveAfter) {
-        _addLog('Backup Restored', '${_rooms.length} Rooms, ${_tenants.length} Tenants restored', 'info');
+        _addLog('Backup Restored', '${_rooms.length} Rooms restored', 'info');
         _saveData();
       }
       if (!silent) _msg('Backup Restored Successfully!');
@@ -288,44 +284,255 @@ class _PropertyHomeState extends State<PropertyHome> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Enable Fingerprint & PIN Lock', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: const Text('Require authentication when opening app', style: TextStyle(fontSize: 12)),
               value: enabled,
               onChanged: (v) => setSt(() => enabled = v),
             ),
             const SizedBox(height: 8),
-            TextField(
-              controller: pinC,
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              decoration: const InputDecoration(labelText: 'Backup PIN (4-6 digits)', border: OutlineInputBorder(), isDense: true),
-            ),
+            TextField(controller: pinC, keyboardType: TextInputType.number, maxLength: 6, decoration: const InputDecoration(labelText: 'Backup PIN (4-6 digits)', border: OutlineInputBorder(), isDense: true)),
           ]),
           actions: [
-            if (_lockEnabled)
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  setState(() => _isLocked = true);
-                },
-                child: const Text('Lock Now'),
-              ),
+            if (_lockEnabled) TextButton(onPressed: () { Navigator.pop(context); setState(() => _isLocked = true); }, child: const Text('Lock Now')),
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
             FilledButton(
               onPressed: () {
-                if (pinC.text.trim().length < 4) {
-                  _msg('PIN must be at least 4 digits!');
-                  return;
-                }
-                _lockEnabled = enabled;
-                _appPin = pinC.text.trim();
-                _saveData();
-                Navigator.pop(context);
+                if (pinC.text.trim().length < 4) { _msg('PIN must be at least 4 digits!'); return; }
+                _lockEnabled = enabled; _appPin = pinC.text.trim();
+                _saveData(); Navigator.pop(context);
                 _msg(_lockEnabled ? 'App Lock Enabled!' : 'App Lock Disabled.');
               },
               child: const Text('Save'),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showExpenseDialog({ExpenseItem? exp}) {
+    final isEdit = exp != null;
+    final now = DateTime.now();
+    final titleC = TextEditingController(text: exp?.title ?? '');
+    final amtC = TextEditingController(text: exp != null ? '${exp.amount}' : '');
+    final dateC = TextEditingController(text: exp?.date ?? '${now.day}/${now.month}/${now.year}');
+    String cat = exp?.category ?? 'Electricity';
+    // Added 'Rent' in Expense categories
+    const categories = ['Rent', 'Electricity', 'Water', 'Maintenance', 'Wifi', 'Cleaning', 'Salary', 'Other'];
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setSt) => AlertDialog(
+          title: Text(isEdit ? 'Edit Expense' : 'Add Expense ($_mName)'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              DropdownButtonFormField<String>(
+                value: categories.contains(cat) ? cat : 'Other',
+                decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder(), isDense: true),
+                items: categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                onChanged: (v) => setSt(() => cat = v ?? 'Other'),
+              ),
+              const SizedBox(height: 10),
+              TextField(controller: titleC, decoration: const InputDecoration(labelText: 'Description / Note', border: OutlineInputBorder(), isDense: true)),
+              const SizedBox(height: 10),
+              TextField(controller: amtC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Amount (₹)', prefixText: '₹ ', border: OutlineInputBorder(), isDense: true)),
+              const SizedBox(height: 10),
+              TextField(
+                controller: dateC,
+                decoration: InputDecoration(
+                  labelText: 'Expense Date (DD/MM/YYYY)', border: const OutlineInputBorder(), isDense: true,
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.calendar_today_outlined, size: 18),
+                    onPressed: () async {
+                      final picked = await showDatePicker(context: context, initialDate: now, firstDate: DateTime(2020), lastDate: DateTime(2035));
+                      if (picked != null) setSt(() => dateC.text = '${picked.day}/${picked.month}/${picked.year}');
+                    },
+                  ),
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            if (isEdit)
+              TextButton(onPressed: () {
+                _addLog('Expense Deleted: ${exp.title}', '₹${exp.amount} (${exp.category})', 'info');
+                _expenses.removeWhere((x) => x.id == exp.id);
+                _saveData(); Navigator.pop(context);
+              }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () {
+                final amt = int.tryParse(amtC.text.trim()) ?? 0;
+                if (amt <= 0) return;
+                final title = titleC.text.trim().isEmpty ? cat : titleC.text.trim();
+                final dateStr = dateC.text.trim().isEmpty ? '${now.day}/${now.month}/${now.year}' : dateC.text.trim();
+                final item = ExpenseItem(id: isEdit ? exp.id : now.millisecondsSinceEpoch.toString(), title: title, category: cat, amount: amt, date: dateStr, monthKey: isEdit ? exp.monthKey : _mKey);
+                if (isEdit) {
+                  final idx = _expenses.indexWhere((x) => x.id == exp.id);
+                  if (idx != -1) _expenses[idx] = item;
+                  _addLog('Expense Edited: $title', 'Updated to ₹$amt • $cat', 'expense');
+                } else {
+                  _expenses.add(item);
+                  _addLog('Expense Added: $title', 'Amount: -₹$amt ($cat • $_mName)', 'expense');
+                }
+                _saveData(); Navigator.pop(context);
+              },
+              child: Text(isEdit ? 'Update' : 'Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRoomDialog({RoomModel? room}) {
+    final isEdit = room != null;
+    final nameC = TextEditingController(text: room?.name ?? '');
+    final floorC = TextEditingController(text: room?.floor ?? (_selectedFloor ?? 'First Floor'));
+    final bedsC = TextEditingController(text: '${room?.totalBeds ?? 4}');
+    final rentC = TextEditingController(text: '${room?.defaultRent ?? 4000}');
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(isEdit ? 'Edit Room' : 'Add Room'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(controller: nameC, decoration: const InputDecoration(labelText: 'Room Name (e.g. Room F1)', border: OutlineInputBorder())),
+            const SizedBox(height: 8),
+            TextField(controller: floorC, decoration: const InputDecoration(labelText: 'Floor (e.g. First Floor)', border: OutlineInputBorder())),
+            const SizedBox(height: 8),
+            TextField(controller: bedsC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Total Beds', border: OutlineInputBorder())),
+            const SizedBox(height: 8),
+            TextField(controller: rentC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Rent Per Bed (₹)', border: OutlineInputBorder())),
+          ]),
+        ),
+        actions: [
+          if (isEdit)
+            TextButton(onPressed: () {
+              _addLog('Room Deleted: ${room.name}', 'Floor: ${room.floor}', 'info');
+              _tenants.removeWhere((t) => t.roomId == room.id);
+              _rooms.removeWhere((r) => r.id == room.id);
+              _saveData(); Navigator.pop(context);
+            }, child: const Text('Delete Room', style: TextStyle(color: Colors.red))),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (nameC.text.trim().isEmpty) return;
+              final newR = RoomModel(
+                id: isEdit ? room.id : DateTime.now().millisecondsSinceEpoch.toString(),
+                name: nameC.text.trim(), floor: floorC.text.trim().isEmpty ? 'Ground Floor' : floorC.text.trim(),
+                totalBeds: (int.tryParse(bedsC.text) ?? 4).clamp(1, 20), defaultRent: int.tryParse(rentC.text) ?? 4000,
+              );
+              if (isEdit) {
+                _rooms[_rooms.indexWhere((x) => x.id == room.id)] = newR;
+                _addLog('Room Updated: ${newR.name}', '${newR.totalBeds} beds', 'info');
+              } else {
+                _rooms.add(newR);
+                _addLog('New Room Created: ${newR.name}', '${newR.floor}', 'info');
+              }
+              _saveData(); Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showBedSheet(RoomModel room, int bedIdx, Tenant? t) {
+    if (t == null) { _showTenantForm(room, bedIdx, null); return; }
+    final paid = _paid(t.id), bal = (t.monthlyRent - paid).clamp(0, t.monthlyRent);
+    final depBal = (t.depositAmount - t.depositPaid).clamp(0, t.depositAmount);
+    final isOverdue = _isOverdue(t);
+    final rentCtrl = TextEditingController();
+    final depCtrl = TextEditingController();
+    final tenantLogs = _logs.where((l) => l.tenantId == t.id).take(8).toList();
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Expanded(child: Text('${t.name} (${room.name})', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold))),
+          IconButton(icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () { Navigator.pop(context); _showTenantForm(room, bedIdx, t); }),
+          IconButton(icon: const Icon(Icons.person_remove_outlined, color: Colors.red, size: 20), onPressed: () {
+            _addLog('Tenant Vacated: ${t.name}', '${room.name} (Bed ${bedIdx + 1})', 'info', tenantId: t.id);
+            _tenants.removeWhere((x) => x.id == t.id);
+            _saveData(); Navigator.pop(context);
+          }),
+        ]),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Monthly Rent: ₹${t.monthlyRent} • Due Day: ${t.dueDay}th'),
+                  Text('Paid ($_mName): ₹$paid • Balance: ₹$bal', style: TextStyle(fontWeight: FontWeight.bold, color: bal == 0 ? Colors.green : (isOverdue ? Colors.red : Colors.blue))),
+                  const Divider(),
+                  Text('Deposit Held: ₹${t.depositPaid} / ₹${t.depositAmount} ${depBal > 0 ? "(Due: ₹$depBal)" : "✓"}', style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.teal)),
+                ]),
+              ),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(child: TextField(controller: rentCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Add Rent (₹)', isDense: true, border: OutlineInputBorder()))),
+                const SizedBox(width: 6),
+                FilledButton(onPressed: () {
+                  final add = int.tryParse(rentCtrl.text) ?? 0;
+                  if (add > 0) {
+                    final newPaid = (paid + add).clamp(0, t.monthlyRent * 2);
+                    _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': newPaid};
+                    _addLog('Rent Received: +₹$add', '${t.name} (${room.name}) • $_mName', 'rent', tenantId: t.id);
+                    _saveData();
+                  }
+                  Navigator.pop(context);
+                }, child: const Text('Add')),
+                const SizedBox(width: 4),
+                OutlinedButton(onPressed: () {
+                  _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': t.monthlyRent};
+                  _addLog('Full Rent Paid: +₹${t.monthlyRent}', '${t.name} (${room.name}) • $_mName', 'rent', tenantId: t.id);
+                  _saveData(); Navigator.pop(context);
+                }, child: const Text('Full')),
+              ]),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(child: TextField(controller: depCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Add Deposit (₹)', isDense: true, border: OutlineInputBorder()))),
+                const SizedBox(width: 6),
+                FilledButton.tonal(onPressed: () {
+                  final add = int.tryParse(depCtrl.text) ?? 0;
+                  if (add > 0) {
+                    t.depositPaid = (t.depositPaid + add).clamp(0, 999999);
+                    _addLog('Deposit Received: +₹$add', '${t.name} (${room.name})', 'deposit', tenantId: t.id);
+                    _saveData();
+                  }
+                  Navigator.pop(context);
+                }, child: const Text('Add Dep')),
+              ]),
+              if (tenantLogs.isNotEmpty) ...[
+                const Divider(height: 22),
+                const Text('Recent Activity / Payment History:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                const SizedBox(height: 6),
+                ...tenantLogs.map((l) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(children: [
+                        Icon(l.type == 'rent' ? Icons.check_circle_outline : Icons.history, size: 14, color: Colors.green),
+                        const SizedBox(width: 6),
+                        Expanded(child: Text('${l.title} • ${l.time}', style: const TextStyle(fontSize: 11))),
+                      ]),
+                    )),
+              ],
+            ]),
+          ),
+        ),
+        actions: [
+          if (paid > 0) TextButton(onPressed: () {
+            _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': 0};
+            _addLog('Rent Reset to ₹0', '${t.name} (${room.name})', 'info', tenantId: t.id);
+            _saveData(); Navigator.pop(context);
+          }, child: const Text('Reset Rent', style: TextStyle(color: Colors.red))),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+        ],
       ),
     );
   }
@@ -369,278 +576,15 @@ class _PropertyHomeState extends State<PropertyHome> {
               );
               if (isEdit) {
                 _tenants[_tenants.indexWhere((x) => x.id == t.id)] = newT;
-                _addLog('Tenant Edited: ${newT.name}', '${room.name} (Bed ${bedIdx + 1}) • Rent: ₹${newT.monthlyRent}', 'info', tenantId: newT.id);
+                _addLog('Tenant Edited: ${newT.name}', '${room.name}', 'info', tenantId: newT.id);
               } else {
                 _tenants.add(newT);
-                _addLog('New Tenant Joined: ${newT.name}', '${room.name} (Bed ${bedIdx + 1}) • Dep Paid: ₹${newT.depositPaid}', 'deposit', tenantId: newT.id);
+                _addLog('New Tenant Joined: ${newT.name}', '${room.name} (Bed ${bedIdx + 1})', 'deposit', tenantId: newT.id);
               }
-              _saveData();
-              Navigator.pop(context);
+              _saveData(); Navigator.pop(context);
             },
             child: const Text('Save'),
           ),
-        ],
-      ),
-    );
-  }
-
-  void _showExpenseDialog({ExpenseItem? exp}) {
-    final isEdit = exp != null;
-    final now = DateTime.now();
-    final titleC = TextEditingController(text: exp?.title ?? '');
-    final amtC = TextEditingController(text: exp != null ? '${exp.amount}' : '');
-    final dateC = TextEditingController(text: exp?.date ?? '${now.day}/${now.month}/${now.year}');
-    String cat = exp?.category ?? 'Electricity';
-    const categories = ['Electricity', 'Water', 'Maintenance', 'Wifi', 'Cleaning', 'Salary', 'Other'];
-
-    showDialog(
-      context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (context, setSt) => AlertDialog(
-          title: Text(isEdit ? 'Edit Expense' : 'Add Expense ($_mName)'),
-          content: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              DropdownButtonFormField<String>(
-                value: categories.contains(cat) ? cat : 'Other',
-                decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder(), isDense: true),
-                items: categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (v) => setSt(() => cat = v ?? 'Other'),
-              ),
-              const SizedBox(height: 10),
-              TextField(controller: titleC, decoration: const InputDecoration(labelText: 'Description / Note', border: OutlineInputBorder(), isDense: true)),
-              const SizedBox(height: 10),
-              TextField(controller: amtC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Amount (₹)', prefixText: '₹ ', border: OutlineInputBorder(), isDense: true)),
-              const SizedBox(height: 10),
-              TextField(
-                controller: dateC,
-                decoration: InputDecoration(
-                  labelText: 'Expense Date (DD/MM/YYYY)', border: const OutlineInputBorder(), isDense: true,
-                  suffixIcon: IconButton(
-                    icon: const Icon(Icons.calendar_today_outlined, size: 18),
-                    onPressed: () async {
-                      final picked = await showDatePicker(context: context, initialDate: now, firstDate: DateTime(2020), lastDate: DateTime(2035));
-                      if (picked != null) setSt(() => dateC.text = '${picked.day}/${picked.month}/${picked.year}');
-                    },
-                  ),
-                ),
-              ),
-            ]),
-          ),
-          actions: [
-            if (isEdit)
-              TextButton(
-                onPressed: () {
-                  _addLog('Expense Deleted: ${exp.title}', '₹${exp.amount} (${exp.category})', 'info');
-                  _expenses.removeWhere((x) => x.id == exp.id);
-                  _saveData();
-                  Navigator.pop(context);
-                },
-                child: const Text('Delete', style: TextStyle(color: Colors.red)),
-              ),
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () {
-                final amt = int.tryParse(amtC.text.trim()) ?? 0;
-                if (amt <= 0) return;
-                final title = titleC.text.trim().isEmpty ? cat : titleC.text.trim();
-                final dateStr = dateC.text.trim().isEmpty ? '${now.day}/${now.month}/${now.year}' : dateC.text.trim();
-                final item = ExpenseItem(id: isEdit ? exp.id : now.millisecondsSinceEpoch.toString(), title: title, category: cat, amount: amt, date: dateStr, monthKey: isEdit ? exp.monthKey : _mKey);
-                if (isEdit) {
-                  final idx = _expenses.indexWhere((x) => x.id == exp.id);
-                  if (idx != -1) _expenses[idx] = item;
-                  _addLog('Expense Edited: $title', 'Updated to ₹$amt (was ₹${exp.amount}) • $cat', 'expense');
-                } else {
-                  _expenses.add(item);
-                  _addLog('Expense Added: $title', 'Amount: -₹$amt ($cat • $_mName)', 'expense');
-                }
-                _saveData();
-                Navigator.pop(context);
-              },
-              child: Text(isEdit ? 'Update' : 'Save'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showRoomDialog({RoomModel? room}) {
-    final isEdit = room != null;
-    final nameC = TextEditingController(text: room?.name ?? '');
-    final floorC = TextEditingController(text: room?.floor ?? (_selectedFloor ?? 'First Floor'));
-    final bedsC = TextEditingController(text: '${room?.totalBeds ?? 4}');
-    final rentC = TextEditingController(text: '${room?.defaultRent ?? 4000}');
-
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(isEdit ? 'Edit Room' : 'Add Room'),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(controller: nameC, decoration: const InputDecoration(labelText: 'Room Name (e.g. Room F1)', border: OutlineInputBorder())),
-            const SizedBox(height: 8),
-            TextField(controller: floorC, decoration: const InputDecoration(labelText: 'Floor (e.g. First Floor)', border: OutlineInputBorder())),
-            const SizedBox(height: 8),
-            TextField(controller: bedsC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Total Beds (e.g. 4 or 6)', border: OutlineInputBorder())),
-            const SizedBox(height: 8),
-            TextField(controller: rentC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Rent Per Bed (₹)', border: OutlineInputBorder())),
-          ]),
-        ),
-        actions: [
-          if (isEdit)
-            TextButton(
-              onPressed: () {
-                _addLog('Room Deleted: ${room.name}', 'Floor: ${room.floor}', 'info');
-                _tenants.removeWhere((t) => t.roomId == room.id);
-                _rooms.removeWhere((r) => r.id == room.id);
-                _saveData();
-                Navigator.pop(context);
-              },
-              child: const Text('Delete Room', style: TextStyle(color: Colors.red)),
-            ),
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              if (nameC.text.trim().isEmpty) return;
-              final newR = RoomModel(
-                id: isEdit ? room.id : DateTime.now().millisecondsSinceEpoch.toString(),
-                name: nameC.text.trim(), floor: floorC.text.trim().isEmpty ? 'Ground Floor' : floorC.text.trim(),
-                totalBeds: (int.tryParse(bedsC.text) ?? 4).clamp(1, 20), defaultRent: int.tryParse(rentC.text) ?? 4000,
-              );
-              if (isEdit) {
-                _rooms[_rooms.indexWhere((x) => x.id == room.id)] = newR;
-                _addLog('Room Updated: ${newR.name}', '${newR.totalBeds} beds • ₹${newR.defaultRent}/bed', 'info');
-              } else {
-                _rooms.add(newR);
-                _addLog('New Room Created: ${newR.name}', '${newR.floor} • ${newR.totalBeds} beds', 'info');
-              }
-              _saveData();
-              Navigator.pop(context);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showBedSheet(RoomModel room, int bedIdx, Tenant? t) {
-    if (t == null) {
-      _showTenantForm(room, bedIdx, null);
-      return;
-    }
-    final paid = _paid(t.id), bal = (t.monthlyRent - paid).clamp(0, t.monthlyRent);
-    final depBal = (t.depositAmount - t.depositPaid).clamp(0, t.depositAmount);
-    final isOverdue = _isOverdue(t);
-    final rentCtrl = TextEditingController();
-    final depCtrl = TextEditingController();
-    final tenantLogs = _logs.where((l) => l.tenantId == t.id).take(8).toList();
-
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Expanded(child: Text('${t.name} (${room.name})', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold))),
-          IconButton(icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () { Navigator.pop(context); _showTenantForm(room, bedIdx, t); }),
-          IconButton(icon: const Icon(Icons.person_remove_outlined, color: Colors.red, size: 20), onPressed: () {
-            _addLog('Tenant Vacated: ${t.name}', '${room.name} (Bed ${bedIdx + 1})', 'info', tenantId: t.id);
-            _tenants.removeWhere((x) => x.id == t.id);
-            _saveData();
-            Navigator.pop(context);
-          }),
-        ]),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Monthly Rent: ₹${t.monthlyRent} • Due Day: ${t.dueDay}th'),
-                  Text('Paid ($_mName): ₹$paid • Balance: ₹$bal', style: TextStyle(fontWeight: FontWeight.bold, color: bal == 0 ? Colors.green : (isOverdue ? Colors.red : Colors.blue))),
-                  if (!isOverdue && bal > 0) Text('Status: Upcoming (Due on ${t.dueDay}th)', style: const TextStyle(fontSize: 12, color: Colors.blue)),
-                  const Divider(),
-                  Text('Deposit Held: ₹${t.depositPaid} / ₹${t.depositAmount} ${depBal > 0 ? "(Due: ₹$depBal)" : "✓"}', style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.teal)),
-                ]),
-              ),
-              const SizedBox(height: 12),
-              Row(children: [
-                Expanded(child: TextField(controller: rentCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Add Rent (₹)', isDense: true, border: OutlineInputBorder()))),
-                const SizedBox(width: 6),
-                FilledButton(
-                    onPressed: () {
-                      final add = int.tryParse(rentCtrl.text) ?? 0;
-                      if (add > 0) {
-                        final newPaid = (paid + add).clamp(0, t.monthlyRent * 2);
-                        _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': newPaid};
-                        _addLog('Rent Received: +₹$add', '${t.name} (${room.name}) • $_mName (Total Paid: ₹$newPaid)', 'rent', tenantId: t.id);
-                        _saveData();
-                      }
-                      Navigator.pop(context);
-                    },
-                    child: const Text('Add')),
-                const SizedBox(width: 4),
-                OutlinedButton(
-                    onPressed: () {
-                      _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': t.monthlyRent};
-                      _addLog('Full Rent Paid: +₹${t.monthlyRent}', '${t.name} (${room.name}) • $_mName', 'rent', tenantId: t.id);
-                      _saveData();
-                      Navigator.pop(context);
-                    },
-                    child: const Text('Full')),
-              ]),
-              const SizedBox(height: 10),
-              Row(children: [
-                Expanded(child: TextField(controller: depCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Add Deposit (₹)', isDense: true, border: OutlineInputBorder()))),
-                const SizedBox(width: 6),
-                FilledButton.tonal(
-                    onPressed: () {
-                      final add = int.tryParse(depCtrl.text) ?? 0;
-                      if (add > 0) {
-                        t.depositPaid = (t.depositPaid + add).clamp(0, 999999);
-                        _addLog('Deposit Received: +₹$add', '${t.name} (${room.name}) • Total Dep: ₹${t.depositPaid}', 'deposit', tenantId: t.id);
-                        _saveData();
-                      }
-                      Navigator.pop(context);
-                    },
-                    child: const Text('Add Dep')),
-              ]),
-              if (tenantLogs.isNotEmpty) ...[
-                const Divider(height: 22),
-                const Text('Recent Activity / Payment History:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.black87)),
-                const SizedBox(height: 6),
-                ...tenantLogs.map((l) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Icon(l.type == 'rent' ? Icons.check_circle_outline : Icons.history, size: 14, color: l.type == 'rent' ? Colors.green : Colors.teal),
-                        const SizedBox(width: 6),
-                        Expanded(child: Text('${l.title} (${l.subtitle}) • ${l.time}', style: const TextStyle(fontSize: 11))),
-                      ]),
-                    )),
-              ],
-            ]),
-          ),
-        ),
-        actions: [
-          if (paid > 0)
-            TextButton(
-                onPressed: () {
-                  _payments.putIfAbsent(_mKey, () => {})[t.id] = {'paid': 0};
-                  _addLog('Rent Reset to ₹0', '${t.name} (${room.name}) • $_mName', 'info', tenantId: t.id);
-                  _saveData();
-                  Navigator.pop(context);
-                },
-                child: const Text('Reset Rent', style: TextStyle(color: Colors.red))),
-          TextButton.icon(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: 'Hello ${t.name} (${room.name}), your $_mName rent balance is ₹$bal (Due: ${t.dueDay}th).'));
-              _msg('WhatsApp Reminder Copied!');
-            },
-            icon: const Icon(Icons.copy, size: 16),
-            label: const Text('Reminder'),
-          ),
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
         ],
       ),
     );
@@ -662,54 +606,32 @@ class _PropertyHomeState extends State<PropertyHome> {
       for (final t in rTenants) {
         final p = _paid(t.id), b = (t.monthlyRent - p).clamp(0, t.monthlyRent);
         final od = _isOverdue(t);
-        expectedRent += t.monthlyRent;
-        col += p;
-        depHeld += t.depositPaid;
-        depPending += (t.depositAmount - t.depositPaid).clamp(0, t.depositAmount);
-        if (od) {
-          due += b;
-          overdueList.add('  ! ${t.name} (${r.name}) - Overdue: ₹$b (Due ${t.dueDay}th)');
-        } else {
-          upcoming += b;
-        }
-        final status = b == 0 ? 'PAID' : (od ? 'OVERDUE (₹$b)' : 'UPCOMING (₹$b, Due ${t.dueDay}th)');
-        sb.writeln('  • ${t.name}: Rent ₹${t.monthlyRent} | Paid ₹$p | $status | Dep: ₹${t.depositPaid}/₹${t.depositAmount}');
+        expectedRent += t.monthlyRent; col += p;
+        depHeld += t.depositPaid; depPending += (t.depositAmount - t.depositPaid).clamp(0, t.depositAmount);
+        if (od) { due += b; overdueList.add('  ! ${t.name} (${r.name}) - Overdue: ₹$b'); } else { upcoming += b; }
+        sb.writeln('  • ${t.name}: Rent ₹${t.monthlyRent} | Paid ₹$p | Dep: ₹${t.depositPaid}/₹${t.depositAmount}');
       }
     }
 
     final mExpenses = _expenses.where((e) => e.monthKey == _mKey).toList();
     final totalExp = mExpenses.fold(0, (s, e) => s + e.amount);
     final Map<String, int> catTotals = {};
-    for (final e in mExpenses) {
-      catTotals[e.category] = (catTotals[e.category] ?? 0) + e.amount;
-    }
+    for (final e in mExpenses) { catTotals[e.category] = (catTotals[e.category] ?? 0) + e.amount; }
 
     final net = col - totalExp;
     final out = StringBuffer();
     out.writeln('=== EASYRENT REPORT ($_mName) ===');
     out.writeln('Occupancy: $occBeds/$totalBeds Beds Occupied ($vacBeds Vacant)');
-    out.writeln('Total Expected Income (Active Tenants): ₹$expectedRent');
-    out.writeln('Max Potential Income (If 100% Full): ₹$maxPotentialRent');
-    out.writeln('Rent Collected: ₹$col | Expenses: ₹$totalExp');
-    out.writeln('Net Profit / Balance: ₹$net');
-    out.writeln('Overdue Rent: ₹$due | Upcoming: ₹$upcoming');
-    out.writeln('Deposit Held: ₹$depHeld | Deposit Pending: ₹$depPending');
+    out.writeln('Total Expected Income: ₹$expectedRent | Max Potential: ₹$maxPotentialRent');
+    out.writeln('Rent Collected: ₹$col | Expenses: ₹$totalExp | Net Profit: ₹$net');
     out.writeln('-----------------------------------------');
     if (overdueList.isNotEmpty) {
-      out.writeln('\n=== OVERDUE DEFAULTERS (${overdueList.length}) ===');
-      for (final line in overdueList) {
-        out.writeln(line);
-      }
+      out.writeln('\n=== OVERDUE DEFAULTERS ===');
+      for (final line in overdueList) out.writeln(line);
     }
-    out.writeln('\n=== ROOM-WISE BREAKDOWN ===$sb');
     out.writeln('\n=== EXPENSES BY CATEGORY ($_mName) ===');
-    if (mExpenses.isEmpty) {
-      out.writeln('  No expenses recorded.');
-    } else {
+    if (mExpenses.isEmpty) { out.writeln('  No expenses recorded.'); } else {
       catTotals.forEach((k, v) => out.writeln('  • $k: ₹$v'));
-      for (final e in mExpenses) {
-        out.writeln('  - ${e.title} (${e.category}): ₹${e.amount} [${e.date}]');
-      }
     }
     final text = out.toString();
 
@@ -732,7 +654,7 @@ class _PropertyHomeState extends State<PropertyHome> {
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (context, setSt) => AlertDialog(
-          title: const Row(children: [Icon(Icons.cloud_sync_outlined, color: Color(0xFF2563EB)), SizedBox(width: 8), Text('Backup & Restore', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))]),
+          title: const Row(children: [Icon(Icons.cloud_sync_outlined, color: Color(0xFF2563EB)), SizedBox(width: 8), Text('Backup & Restore')]),
           content: SizedBox(
             width: double.maxFinite,
             child: SingleChildScrollView(
@@ -746,52 +668,32 @@ class _PropertyHomeState extends State<PropertyHome> {
                 FilledButton.icon(
                   onPressed: () async {
                     _lastBackupTime = _nowStamp();
-                    _saveData();
-                    setSt(() {});
+                    _saveData(); setSt(() {});
                     final jsonStr = jsonEncode(_buildBackupMap());
                     try {
                       final f = File('${Directory.systemTemp.path}/EasyRent_Backup.json');
                       f.writeAsStringSync(jsonStr, flush: true);
                       await Share.shareXFiles([XFile(f.path)], text: 'EasyRent Backup ($_lastBackupTime)');
-                    } catch (_) {
-                      Share.share(jsonStr);
-                    }
+                    } catch (_) { Share.share(jsonStr); }
                   },
-                  icon: const Icon(Icons.upload_file),
-                  label: const Text('Export Backup File (.json)'),
+                  icon: const Icon(Icons.upload_file), label: const Text('Export Backup File (.json)'),
                 ),
                 const SizedBox(height: 6),
                 OutlinedButton.icon(
                   onPressed: () {
                     _lastBackupTime = _nowStamp();
-                    _saveData();
-                    setSt(() {});
+                    _saveData(); setSt(() {});
                     Clipboard.setData(ClipboardData(text: jsonEncode(_buildBackupMap())));
                     _msg('Backup code copied!');
                   },
-                  icon: const Icon(Icons.copy, size: 18),
-                  label: const Text('Copy Backup Code'),
+                  icon: const Icon(Icons.copy, size: 18), label: const Text('Copy Backup Code'),
                 ),
                 const Divider(height: 24),
-                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                  const Text('Restore Backup:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                  TextButton.icon(
-                    onPressed: () async {
-                      final data = await Clipboard.getData('text/plain');
-                      if (data?.text != null) setSt(() => ctrl.text = data!.text!.trim());
-                    },
-                    icon: const Icon(Icons.content_paste, size: 16),
-                    label: const Text('Paste'),
-                  ),
-                ]),
                 TextField(controller: ctrl, maxLines: 3, decoration: const InputDecoration(hintText: 'Paste backup JSON here...', border: OutlineInputBorder(), isDense: true)),
                 const SizedBox(height: 8),
                 FilledButton.tonalIcon(
-                  onPressed: () {
-                    if (ctrl.text.trim().isNotEmpty && _importJson(ctrl.text.trim())) Navigator.pop(context);
-                  },
-                  icon: const Icon(Icons.settings_backup_restore),
-                  label: const Text('Restore Data Now'),
+                  onPressed: () { if (ctrl.text.trim().isNotEmpty && _importJson(ctrl.text.trim())) Navigator.pop(context); },
+                  icon: const Icon(Icons.settings_backup_restore), label: const Text('Restore Data Now'),
                 ),
               ]),
             ),
@@ -806,10 +708,7 @@ class _PropertyHomeState extends State<PropertyHome> {
     final sel = _tab == key;
     return Expanded(
       child: GestureDetector(
-        onTap: () => setState(() {
-          _tab = key;
-          if (key == 'rooms') _selectedFloor = null;
-        }),
+        onTap: () => setState(() { _tab = key; if (key == 'rooms') _selectedFloor = null; }),
         child: Container(
           decoration: BoxDecoration(
             color: sel ? const Color(0xFFDCE2F9) : Colors.transparent,
@@ -839,31 +738,17 @@ class _PropertyHomeState extends State<PropertyHome> {
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(28),
             child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(color: Colors.blue.shade50, shape: BoxShape.circle),
-                child: const Icon(Icons.fingerprint, size: 68, color: Color(0xFF2563EB)),
-              ),
+              Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.blue.shade50, shape: BoxShape.circle), child: const Icon(Icons.fingerprint, size: 68, color: Color(0xFF2563EB))),
               const SizedBox(height: 16),
               const Text('EasyRent Tracker Locked', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
-              Text('Use Fingerprint or enter your PIN to unlock', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
               const SizedBox(height: 24),
               SizedBox(
                 width: 220,
                 child: TextField(
-                  controller: _unlockPinCtrl,
-                  obscureText: true,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
+                  controller: _unlockPinCtrl, obscureText: true, keyboardType: TextInputType.number, textAlign: TextAlign.center,
                   decoration: const InputDecoration(hintText: 'Enter PIN', border: OutlineInputBorder(), isDense: true),
                   onSubmitted: (v) {
-                    if (v.trim() == _appPin) {
-                      _unlockPinCtrl.clear();
-                      setState(() => _isLocked = false);
-                    } else {
-                      _msg('Incorrect PIN!');
-                    }
+                    if (v.trim() == _appPin) { _unlockPinCtrl.clear(); setState(() => _isLocked = false); } else { _msg('Incorrect PIN!'); }
                   },
                 ),
               ),
@@ -871,22 +756,12 @@ class _PropertyHomeState extends State<PropertyHome> {
               Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                 FilledButton.icon(
                   onPressed: () {
-                    if (_unlockPinCtrl.text.trim() == _appPin) {
-                      _unlockPinCtrl.clear();
-                      setState(() => _isLocked = false);
-                    } else {
-                      _msg('Incorrect PIN!');
-                    }
+                    if (_unlockPinCtrl.text.trim() == _appPin) { _unlockPinCtrl.clear(); setState(() => _isLocked = false); } else { _msg('Incorrect PIN!'); }
                   },
-                  icon: const Icon(Icons.lock_open, size: 18),
-                  label: const Text('Unlock with PIN'),
+                  icon: const Icon(Icons.lock_open, size: 18), label: const Text('Unlock with PIN'),
                 ),
                 const SizedBox(width: 10),
-                OutlinedButton.icon(
-                  onPressed: _triggerBiometricUnlock,
-                  icon: const Icon(Icons.fingerprint, size: 20),
-                  label: const Text('Fingerprint'),
-                ),
+                OutlinedButton.icon(onPressed: _triggerBiometricUnlock, icon: const Icon(Icons.fingerprint, size: 20), label: const Text('Fingerprint')),
               ]),
             ]),
           ),
@@ -897,6 +772,8 @@ class _PropertyHomeState extends State<PropertyHome> {
     final floors = _rooms.map((r) => r.floor).toSet().toList();
     final visibleRooms = _selectedFloor == null ? _rooms : _rooms.where((r) => r.floor == _selectedFloor).toList();
     final mExpenses = _expenses.where((e) => e.monthKey == _mKey).toList();
+    // Month-wise History Logs only
+    final monthLogs = _logs.where((l) => l.monthKey == _mKey).toList();
 
     int totalExpected = 0, totalCol = 0;
     for (final t in _tenants) {
@@ -909,14 +786,9 @@ class _PropertyHomeState extends State<PropertyHome> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Property Management', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 17)),
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
+        backgroundColor: Colors.white, surfaceTintColor: Colors.white,
         actions: [
-          IconButton(
-            onPressed: _showLockSettingsDialog,
-            icon: Icon(_lockEnabled ? Icons.lock_outline : Icons.lock_open_outlined, color: _lockEnabled ? Colors.blue.shade800 : null),
-            tooltip: 'App Lock',
-          ),
+          IconButton(onPressed: _showLockSettingsDialog, icon: Icon(_lockEnabled ? Icons.lock_outline : Icons.lock_open_outlined, color: _lockEnabled ? Colors.blue.shade800 : null)),
           IconButton(onPressed: _showReportDialog, icon: const Icon(Icons.assessment_outlined), tooltip: 'Report'),
           IconButton(onPressed: _showBackupDialog, icon: const Icon(Icons.cloud_sync_outlined), tooltip: 'Backup'),
           IconButton(onPressed: () => setState(() => _month = DateTime(_month.year, _month.month - 1)), icon: const Icon(Icons.chevron_left)),
@@ -960,8 +832,7 @@ class _PropertyHomeState extends State<PropertyHome> {
         Expanded(
           child: _tab == 'floors'
               ? ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: floors.length,
+                  padding: const EdgeInsets.all(16), itemCount: floors.length,
                   itemBuilder: (_, i) {
                     final fl = floors[i];
                     final fRooms = _rooms.where((r) => r.floor == fl).toList();
@@ -984,8 +855,7 @@ class _PropertyHomeState extends State<PropertyHome> {
                   ? (mExpenses.isEmpty
                       ? Center(child: Text('No expenses recorded for $_mName.'))
                       : ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
-                          itemCount: mExpenses.length,
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 80), itemCount: mExpenses.length,
                           itemBuilder: (_, i) {
                             final e = mExpenses[i];
                             return Card(
@@ -1010,13 +880,12 @@ class _PropertyHomeState extends State<PropertyHome> {
                           },
                         ))
                   : _tab == 'history'
-                      ? (_logs.isEmpty
-                          ? const Center(child: Text('No activity or payment history yet.'))
+                      ? (monthLogs.isEmpty
+                          ? Center(child: Text('No history logs for $_mName.'))
                           : ListView.builder(
-                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-                              itemCount: _logs.length,
+                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 20), itemCount: monthLogs.length,
                               itemBuilder: (_, i) {
-                                final l = _logs[i];
+                                final l = monthLogs[i];
                                 final isRent = l.type == 'rent', isDep = l.type == 'deposit', isExp = l.type == 'expense';
                                 final Color c = isRent ? Colors.green.shade700 : (isDep ? Colors.teal.shade700 : (isExp ? Colors.red.shade700 : Colors.blue.shade700));
                                 final Color bg = isRent ? Colors.green.shade50 : (isDep ? Colors.teal.shade50 : (isExp ? Colors.red.shade50 : Colors.blue.shade50));
@@ -1035,8 +904,7 @@ class _PropertyHomeState extends State<PropertyHome> {
                               },
                             ))
                       : ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
-                          itemCount: visibleRooms.length,
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 80), itemCount: visibleRooms.length,
                           itemBuilder: (_, i) => _buildRoomCard(visibleRooms[i]),
                         ),
         ),
@@ -1044,9 +912,7 @@ class _PropertyHomeState extends State<PropertyHome> {
       floatingActionButton: _tab == 'history'
           ? null
           : FloatingActionButton.extended(
-              backgroundColor: const Color(0xFFDCE2F9),
-              foregroundColor: const Color(0xFF1E3A8A),
-              elevation: 2,
+              backgroundColor: const Color(0xFFDCE2F9), foregroundColor: const Color(0xFF1E3A8A), elevation: 2,
               onPressed: () => _tab == 'expenses' ? _showExpenseDialog() : _showRoomDialog(),
               icon: const Icon(Icons.add),
               label: Text(_tab == 'expenses' ? 'Add expense' : 'Add room', style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -1063,8 +929,7 @@ class _PropertyHomeState extends State<PropertyHome> {
     final String statusLabel = isFull ? 'Fully occupied' : (isVacant ? 'Vacant' : 'Partially occupied');
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(bottom: 14), padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: Colors.grey.shade200)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         InkWell(
@@ -1086,9 +951,7 @@ class _PropertyHomeState extends State<PropertyHome> {
         ),
         const SizedBox(height: 12),
         GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: room.totalBeds,
+          shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: room.totalBeds,
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 8, crossAxisSpacing: 8, childAspectRatio: 3.6),
           itemBuilder: (_, bedIdx) {
             final matches = rTenants.where((x) => x.bedIndex == bedIdx).toList();
