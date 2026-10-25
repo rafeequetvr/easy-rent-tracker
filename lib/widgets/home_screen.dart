@@ -732,7 +732,7 @@ class _PropertyHomeState extends State<PropertyHome>
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.grey.WithOpacity(0.15),
+                    color: Colors.grey.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Column(
